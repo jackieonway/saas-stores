@@ -119,7 +119,7 @@ impl Config {
         if metrics_token.as_ref().is_some_and(|v| {
             v.len() < 16
                 || v.len() > 1024
-                || v.chars().any(char::is_whitespace)
+                || !v.bytes().all(|byte| byte.is_ascii_graphic())
                 || platform.as_ref().is_some_and(|p| p.client_secret == *v)
         }) {
             return Err(ConfigError::MetricsToken);
@@ -327,7 +327,13 @@ mod tests {
         let cfg = config(&[("STORES_METRICS_TOKEN", "private-operations-canary")]).unwrap();
         assert!(cfg.metrics_token.is_some());
         assert!(!format!("{cfg:?}").contains("private-operations-canary"));
-        for invalid in ["short", "contains whitespace secret"] {
+        for invalid in [
+            "short",
+            "contains whitespace secret",
+            "无法用于请求头的中文令牌",
+            "private-token-with-nul\0",
+            "private-token-with-del\u{7f}",
+        ] {
             assert_eq!(
                 config(&[("STORES_METRICS_TOKEN", invalid)]).unwrap_err(),
                 ConfigError::MetricsToken

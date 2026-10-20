@@ -139,6 +139,25 @@ test('403 suspends the exact action across theme updates and clears related serv
   controller.dispose()
 })
 
+test('read denial immediately publishes the cleared server view to UI subscribers', async () => {
+  const controller = fixture(url => url.includes('/summary?')
+    ? response({ count: 1, totalAmount: '12.30', dateFrom: '2026-10-18', dateTo: '2026-10-18', storeId: null })
+    : response({ code: 'DATA_DENIED', message: 'denied' }, 403))
+  controller.setContext(withRoute('/reports'))
+  const summary = controller.form('summary')!, query = controller.form('report-query')!
+  controller.patch(summary.id, 'dateFrom', '2026-10-18'); controller.patch(summary.id, 'dateTo', '2026-10-18')
+  await controller.submit(summary.id)
+  assert.ok(controller.state.summary)
+  const rendered: { summary: unknown; denied: boolean; loading: boolean; error: string }[] = []
+  const unsubscribe = controller.subscribe(() => rendered.push({ summary: controller.state.summary,
+    denied: controller.state.denied.has('store-daily-report:read'), loading: controller.state.loading.has('reports'), error: query.error }))
+  controller.patch(query.id, 'storeId', storeId)
+  await controller.submit(query.id)
+  assert.deepEqual(rendered.at(-1), { summary: null, denied: true, loading: false, error: query.error })
+  assert.ok(query.error)
+  unsubscribe(); controller.dispose()
+})
+
 test('staff and reports work with independent grants and direct store ID without implicit store reads', async () => {
   const requests: string[] = [], controller = fixture((url) => { requests.push(url); return response(page(null)) })
   const props = grantContext({ resource: 'store-staff', action: 'read' }, 'ORG', { routePath: base + '/staff' })

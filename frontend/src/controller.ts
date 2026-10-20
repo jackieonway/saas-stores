@@ -183,10 +183,13 @@ export class StoresController {
     this.reads.set(key, controller); this.readOperations.set(key, operationKey(operation)); this.readSerial.set(key, serial)
     const snapshot = this.client.capture(), sequence = this.routeSequence
     this.state.loading.add(key); this.state.error = ''; if (form) form.error = ''; this.emit()
-    const current = () => !controller.signal.aborted && this.client.isCurrent(snapshot) && sequence === this.routeSequence && this.readSerial.get(key) === serial && this.allowed(operation)
+    const ownsRead = () => this.client.isCurrent(snapshot) && sequence === this.routeSequence && this.readSerial.get(key) === serial
+    const current = () => !controller.signal.aborted && ownsRead() && this.allowed(operation)
     try { const result = await request(controller.signal); if (current()) apply(result) }
     catch (error) { if (current()) this.error(error, operation, form) }
-    finally { if (current()) { this.state.loading.delete(key); this.reads.delete(key); this.readOperations.delete(key); this.emit() } }
+    // A denial aborts this read and freezes its operation before finally runs.
+    // Its cleared data and error still need to reach the subscribed UI.
+    finally { if (ownsRead()) { this.state.loading.delete(key); this.reads.delete(key); this.readOperations.delete(key); this.emit() } }
   }
   private validate(form: Form): string | null {
     const fields = form.fields
