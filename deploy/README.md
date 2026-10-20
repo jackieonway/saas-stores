@@ -1,10 +1,10 @@
 # 门店应用平台接入
 
-门店使用既有 Rust [平台管理 CLI](../../../tools/platform-admin/README.md)，稳定应用 code 为 `stores`，宿主路径 `/micro/stores`，业务 API 为 `/stores-api`。本目录只包含可公开审阅的 bootstrap、授权意图及 schema；实际 UUID、clientId、secret 和管理员 Bearer 由部署环境提供。
+门店使用既有 Rust [平台管理 CLI](../../rust-saas/tools/platform-admin/README.md)，稳定应用 code 为 `stores`，宿主路径 `/micro/stores`，业务 API 为 `/stores-api`。本目录只包含可公开审阅的 bootstrap、授权意图及 schema；实际 UUID、clientId、secret 和管理员 Bearer 由部署环境提供。
 
 [bootstrap.manifest.json](bootstrap.manifest.json) 及 [bootstrap.schema.json](bootstrap.schema.json) 与 CLI 编译期 stores 模板逐字节一致。应用固定 HTML + IFRAME、autoCreateMenu=false，初始占位入口 `/sub-apps/stores/unreleased/index.html` 应返回 404；真实内容通过独立前端构建产物和现有平台发布流程接入。Bootstrap 仅管理应用、客户端关联及菜单；Phase28 镜像和固定公开版本路由由独立部署系统处理。
 
-推荐部署路径见[业务镜像交付说明](../../../deploy/microapps/README.md)、[业务 Compose override](../../../deploy/compose.business.yml)、[公开变量模板](../../../deploy/compose.business.env.example)及[版本路由示例](../../../deploy/microapps/gateway.example.json)。门店 Rust API 与前端 v1/v2 静态镜像独立，业务库和机密客户端均使用门店专属配置。只有入口 Nginx 发布 HTTPS，纯镜像无需平台静态产物卷。新路径不扩展本目录的 bootstrap/grant 权限，不自动授权用户，也不表示外部生产发行已经执行。
+推荐部署路径见[业务镜像交付说明](../../rust-saas/deploy/microapps/README.md)、[业务 Compose override](../../rust-saas/deploy/compose.business.yml)、[公开变量模板](../../rust-saas/deploy/compose.business.env.example)及[版本路由示例](../../rust-saas/deploy/microapps/gateway.example.json)。门店 Rust API 与前端 v1/v2 静态镜像独立，业务库和机密客户端均使用门店专属配置。只有入口 Nginx 发布 HTTPS，纯镜像无需平台静态产物卷。新路径不扩展本目录的 bootstrap/grant 权限，不自动授权用户，也不表示外部生产发行已经执行。
 
 本阶段受管 API 验收采用冻结 Linux 源码独立 locked Cargo 编译、ELF/source/inputs/platform/SHA-256 校验后 runtime 装箱，报告标为 `verified-prebuilt-ELF`；默认 [Rust Dockerfile](../backend/Dockerfile)的源码 builder 未实际运行时不能记为 PASS。两版前端仍真实按门店自己的 lockfile 从源码 Docker build。registry push/pull、健康拒绝、普通用户 SDK/Rust 授权和浏览器结果分别以当次 Phase28 报告为准，此处不预记通过。
 

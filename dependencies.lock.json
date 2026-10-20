@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "sourceRepository": "rust-saas",
+  "sourceRevision": "120c211587460f391cf30db73350188ee4ab1882",
+  "sdkVersion": "1.0.0",
+  "files": {
+    "vendor/operational-telemetry/Cargo.lock": "2e3b612bc2ba42434b7ddbc32446442657356364a6083b951a3c5f16ae4cdf9a",
+    "vendor/operational-telemetry/Cargo.toml": "9f3b14ff00778e84b66b085ba9aa1b56f97b742f68c6c5a00ef15cf9722b5818",
+    "vendor/operational-telemetry/src/lib.rs": "ae4fa26581d616e9301a5ed167dcea1a56c50a224e29a6c068a4248b7ec3900c",
+    "frontend/vendor/micro-sdk/artifact-manifest.json": "9e4bd94bbe5a91aca6260b1ced27d55db5b43be9d16f4f5fa526b14125bf221f",
+    "frontend/vendor/micro-sdk/capabilities.d.mts": "d98ab72f85026a48f1d567f01b3f47f60ca8bf3fb901667fd242cd11f8622737",
+    "frontend/vendor/micro-sdk/http.d.mts": "44b1ed2bb8b487c5406bd23f2103f99fadac700d6c68abb9d5110dec194c88a9",
+    "frontend/vendor/micro-sdk/iframe-bridge.js": "27b3f3a6c22e9c3d7d773d8340e1a3c0374383b144ebb49f4712e5fc89f529e8",
+    "frontend/vendor/micro-sdk/index.d.mts": "0f888a712012b504103972b33f798d9d9d6d2223d3c4f16d77b6a7dee6c1dbee",
+    "frontend/vendor/micro-sdk/index.d.ts": "0f888a712012b504103972b33f798d9d9d6d2223d3c4f16d77b6a7dee6c1dbee",
+    "frontend/vendor/micro-sdk/index.mjs": "f90dd916ec772d59c9e8e5c44886139a212dd00cb06dbea611d23dd0fce581ec",
+    "frontend/vendor/micro-sdk/package.json": "b03fc1e1b39a4975867524dd3e6b23b95d428837907bdcc3caeb9b5dc42ccd3b",
+    "frontend/vendor/micro-sdk/protocol.d.mts": "cdbe5aaf878f475c748861e9737d2fa16f8b6bff803854d59ac3891b3fa38934",
+    "frontend/vendor/micro-sdk/protocol.mjs": "835c09caddadaf71672b2e3e5d79252d4e2ab4ab009dcf8585329a64e70f2cd7",
+    "frontend/vendor/micro-sdk/protocol.rs": "cba11eb65964d33aaa942729634dda490610b12f013cf01eab4dbc3468a56471",
+    "frontend/vendor/micro-sdk/schema.json": "859f09fff24625dd4ac5003819ef1438d9e3a14952c7314202cd839f8a142e22",
+    "frontend/vendor/micro-sdk/sdk.js": "27b3f3a6c22e9c3d7d773d8340e1a3c0374383b144ebb49f4712e5fc89f529e8",
+    "frontend/vendor/micro-sdk/types.d.ts": "0b422034f1aebc4a69bae5ffe4420d0ee9553298da4e67f53b606de74539e966",
+    "deploy/bootstrap.manifest.json": "334bce532e3110f14299c30287e5e3fce262eadee1ace8a0643cda1f9e1a2272",
+    "deploy/bootstrap.schema.json": "9313165d17ba53b6629f5ed1edca65e0500a5581fd5b14613b7f47b3b97100f0",
+    "deploy/build-static.mjs": "ed18e010960ccd64a655665f29405a0ae6fb89ef9fdda33bab18aff7e6355503",
+    "deploy/gateway-policy.mjs": "3fdd1d69f7898706f34a5faadfc22e6356a57fc8ddabcf5d505ea6729d00c5cc",
+    "deploy/grants.manifest.example.json": "f2a97125abaf338ac9c199d0c4c4c67f3c3c998eea52b5fe3c2a5853a119f4d4",
+    "deploy/grants.schema.json": "fd655b031a3a752e334222c8be6aedd0ed7a47788276b59078c29de57819d0e5",
+    "deploy/render-static.mjs": "226f7a44df10c8f164ac6a0bd4ac684ee0e50795ad51b77081ad86c2402231ae"
+  }
+}

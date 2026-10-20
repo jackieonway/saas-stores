@@ -1,6 +1,6 @@
 # 门店微应用前端
 
-`stores` 是独立 React／TypeScript／Vite HTML 微应用，通过登记 SDK `1.0.0` 在 opaque iframe 内消费[门店 Rust API](../backend/API.md)。应用 code 为 `stores`，宿主基路径 `/micro/stores`，API 默认前缀 `/stores-api`，没有独立登录或浏览器端 client secret。本文记录当前源码与命令；实际验收由[Phase27 台账](../../../docs/architecture-optimization-ledger.md#phase-27)和阶段证据维护，命令清单不等于测试通过。镜像发行、公开 v1/v2 路由和联合部署归 Phase28；本阶段不抽公共 UI 框架。
+`stores` 是独立 React／TypeScript／Vite HTML 微应用，通过登记 SDK `1.0.0` 在 opaque iframe 内消费[门店 Rust API](../backend/API.md)。应用 code 为 `stores`，宿主基路径 `/micro/stores`，API 默认前缀 `/stores-api`，没有独立登录或浏览器端 client secret。本文记录当前源码与命令；实际验收由[Phase27 台账](../../rust-saas/docs/architecture-optimization-ledger.md#phase-27)和阶段证据维护，命令清单不等于测试通过。镜像发行、公开 v1/v2 路由和联合部署归 Phase28；本阶段不抽公共 UI 框架。
 
 ## 独立安装与运行
 
@@ -68,7 +68,7 @@ build 先执行 TypeScript 检查，覆盖前核验输出 owner，拒绝未知�
 
 ## 成员与提交恢复
 
-成员目录只接受 `store/create`、`store/update`、`store-staff/assign`。DTO 为 `{id, displayName, organizationId}`；员工提交将选中 `id` 显式映射为 `userId`。最终有效性由 Rust 写入前复验。SELF owner 分别为门店创建人、被关联员工、日报录入人；manager 和 `createdByUserId` 不扩大这些范围。详见[双消费者成员差异](../../../docs/stores-member-contract.md)。
+成员目录只接受 `store/create`、`store/update`、`store-staff/assign`。DTO 为 `{id, displayName, organizationId}`；员工提交将选中 `id` 显式映射为 `userId`。最终有效性由 Rust 写入前复验。SELF owner 分别为门店创建人、被关联员工、日报录入人；manager 和 `createdByUserId` 不扩大这些范围。详见[双消费者成员差异](../../rust-saas/docs/stores-member-contract.md)。
 
 日报初始营业日为 Asia/Shanghai 当天，用户可修改，提交明确发送已确认 `YYYY-MM-DD`。发送后固定原门店／日期／正文，跨上海零点不重算。金额始终为十进制字符串，单笔最多 16 位整数、2 位小数，返回固定两位；不经 `Number` 或浮点求和。汇总显示服务器 `COUNT/SUM(numeric)` 精确结果，可超过单笔上限，不以分页相加代替。
 

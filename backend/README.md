@@ -9,9 +9,9 @@
 在仓库根执行：
 
 ```powershell
-cargo build --locked --manifest-path business-apps/stores/backend/Cargo.toml
-cargo test --locked --manifest-path business-apps/stores/backend/Cargo.toml
-cargo run --locked --manifest-path business-apps/stores/backend/Cargo.toml
+cargo build --locked --manifest-path backend/Cargo.toml
+cargo test --locked --manifest-path backend/Cargo.toml
+cargo run --locked --manifest-path backend/Cargo.toml
 ```
 
 `run` 要求事先在当前进程环境注入下表必需值。服务不读取 `.env` 或 `config.example`；不要直接把含空占位的模板当作可运行配置。监听前完成平台客户端配置校验、专属库连接、SQLx 迁移及 schema 契约核对，失败退出非0。默认绑定 `0.0.0.0:3031`，本机调试可显式设 `STORES_HOST=127.0.0.1`。
@@ -89,4 +89,4 @@ PATCH及员工解除关联必需当前正整数version；冲突409保留调用�
 - 所有响应使用 `X-Request-Id`、no-store及安全错误 `{code,message}`；合法请求UUID沿用，否则新建。写入只接受application/json，正文最多64KiB，未知写字段拒绝。
 - CORS允许配置中的精确来源，默认 `Origin:null`，不发送Access-Control-Allow-Credentials；OPTIONS只放行声明方法与Authorization／Content-Type／X-Request-Id，不查询平台或业务库。`null`不是身份，实际请求仍需Bearer与授权。
 
-独立build／test、空库／重复启动／坏schema、真实平台普通用户、三个库与专属非超级账号、双业务ELF交叉token、scope／硬上限、成员失效／期限、日报并发／精度／日期边界及安全日志都需要本阶段实际验证。这里列出源码契约与命令，不预记任何测试PASS；最终状态以[台账](../../../docs/architecture-optimization-ledger.md#phase-26)和本阶段原始证据为准。
+独立build／test、空库／重复启动／坏schema、真实平台普通用户、三个库与专属非超级账号、双业务ELF交叉token、scope／硬上限、成员失效／期限、日报并发／精度／日期边界及安全日志都需要本阶段实际验证。这里列出源码契约与命令，不预记任何测试PASS；最终状态以[台账](../../rust-saas/docs/architecture-optimization-ledger.md#phase-26)和本阶段原始证据为准。

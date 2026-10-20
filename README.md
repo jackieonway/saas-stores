@@ -1,8 +1,35 @@
+# 门店独立仓库 saas-stores
+
+本仓库包含独立前端、Rust API、业务迁移与部署配置。构建无需平台源码或同级目录。运行时通过 HTTP 接入平台，使用独立 PostgreSQL 库与账号。
+
+```powershell
+npm run deps:check
+npm --prefix frontend ci
+npm run build:frontend -- --allowed-host-origin https://platform.example.com
+npm run test:frontend
+npm run check:backend
+npm run test:backend
+npm run build:backend
+```
+
+构建 origin 是公开参数，请替换为真实宿主地址。服务运行前按 backend/README.md 配置平台 HTTPS、应用客户端及业务数据库；秘密放环境或忽略文件。
+
+```powershell
+docker build -f backend/Dockerfile -t stores-api:local .
+docker build -f frontend/Dockerfile --build-arg APP_CODE=stores --build-arg APP_VERSION=1.0.0 --build-arg HOST_ORIGIN=https://platform.example.com --build-arg API_BASE=/stores-api -t stores-web:local .
+```
+
+SDK 1.0.0、纯指标协议与静态部署辅助代码已固定在仓库内；来源与逐文件 SHA-256 记录于 dependencies.lock.json。升级须从审阅的平台版本取得产物、更新摘要并运行测试。Docker context 为本仓库根。
+
+通过 subtree split 保留业务 Git 历史，原平台提交 `120c211587460f391cf30db73350188ee4ab1882`。远程仓库尚未配置。平台联合验收及统一入口 Compose 由平台仓库维护。旧文档中的阶段记录是历史背景，当前仓库根命令以上述说明为准；跨仓文档链接假定可选的平台检出名为 rust-saas。
+
+---
+
 # 简单门店业务
 
 独立源码发行目录的导出、干净构建、部署与兼容矩阵见[独立业务交付](../../docs/independent-business-delivery.md)。当前最终验收以[Phase34报告](../../docs/validation/phase-34.md)为准，下文保留各阶段的历史证据边界。
 
-Phase32 增加默认禁用的私有指标端点：显式设置独立 `STORES_METRICS_TOKEN` 后，从私有网络采集 `/stores-api/internal/metrics`。源码镜像从仓库根构建：`docker build -f business-apps/stores/backend/Dockerfile -t stores-api:candidate .`。固定指标协议不共享业务 SQL 或身份模型，指标含义及容量/告警限制见[监控说明](../../deploy/monitoring/README.md)。
+Phase32 增加默认禁用的私有指标端点：显式设置独立 `STORES_METRICS_TOKEN` 后，从私有网络采集 `/stores-api/internal/metrics`。源码镜像从仓库根构建：`docker build -f backend/Dockerfile -t stores-api:candidate .`。固定指标协议不共享业务 SQL 或身份模型，指标含义及容量/告警限制见[监控说明](../rust-saas/deploy/monitoring/README.md)。
 
 `stores` 是工单之外的第二个独立业务消费者。当前目录包含 [React／TypeScript／Vite 前端](frontend/README.md)、[Rust API](backend/README.md)、专属 PostgreSQL 业务库，以及[公开应用／菜单登记 manifest](deploy/bootstrap.manifest.json)和[受控 grant 示例](deploy/grants.manifest.example.json)。[HTTP 契约](backend/API.md)以当前源码为准；Phase27 正式r2的Chromium／Chrome／Edge各21个必需浏览器组通过、零失败／跳过，覆盖真实平台与两业务Rust、三库、独立空缓存构建及普通用户业务操作。阶段状态及完整门禁结果见[任务台账](../../docs/architecture-optimization-ledger.md#phase-27)与[Phase27验证记录](../../docs/validation/phase-27.md)，双消费者的实际成员请求和差异见[成员契约](../../docs/stores-member-contract.md)。
 
@@ -38,7 +65,7 @@ Phase32 增加默认禁用的私有指标端点：显式设置独立 `STORES_MET
 
 ## 固定镜像与外部 URL 发布
 
-Phase28提供[独立静态／Rust镜像、Compose与发行入口](../../deploy/microapps/README.md)。门店v1／v2各有固定digest静态镜像，Nginx剥离`/sub-apps/stores/versions/<version>/`后代理镜像根目录，无平台产物卷；两版本容器及路由保留，未知版本／缺chunk真实404。前端回滚不隐含门店API或数据库回滚。受管交付驱动从冻结源码在Linux按门店Cargo.lock编译、校验ELF／架构／来源后装入runtime镜像；四静态镜像由两前端源码分别构建，不据此宣称默认API Dockerfile builder已运行。
+Phase28提供[独立静态／Rust镜像、Compose与发行入口](../rust-saas/deploy/microapps/README.md)。门店v1／v2各有固定digest静态镜像，Nginx剥离`/sub-apps/stores/versions/<version>/`后代理镜像根目录，无平台产物卷；两版本容器及路由保留，未知版本／缺chunk真实404。前端回滚不隐含门店API或数据库回滚。受管交付驱动从冻结源码在Linux按门店Cargo.lock编译、校验ELF／架构／来源后装入runtime镜像；四静态镜像由两前端源码分别构建，不据此宣称默认API Dockerfile builder已运行。
 
 部署方先提供实际registry／架构、HTTPS来源／CA、门店专属数据库／账号及实际机密客户端，拉固定digest并确认当前容器health，再用所有环境共享的权威持久inventory执行artifact-bind／verify，随后测试并发布保留旧版的路由。inventory固定同stores版本的来源／digest和构建身份，同环境完整URL登记定义不可变；跨环境可使用不同公开origin但须同一产物。临时runner、Actions artifact或cache不是权威历史。
 
@@ -51,8 +78,8 @@ v1同域入口可用`/stores-api`，批准的外部静态origin提供v2时明确
 独立构建入口：
 
 ```powershell
-cargo build --locked --manifest-path business-apps/stores/backend/Cargo.toml
-cargo test --locked --manifest-path business-apps/stores/backend/Cargo.toml
+cargo build --locked --manifest-path backend/Cargo.toml
+cargo test --locked --manifest-path backend/Cargo.toml
 ```
 
 启动前须按 [后端配置](backend/README.md#configuration)显式注入专属数据库与平台机密客户端配置；仓库不自动加载 `.env`。平台策略的 [示例片段](backend/policy.example.json)包含真实动作和三种成员用途，应用 UUID 必须由管理员用实际 stores 应用值替换，再合并现有策略；它不创建应用、菜单、角色或 grant。
