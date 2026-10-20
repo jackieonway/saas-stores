@@ -1,0 +1,18 @@
+{
+  "name": "stores-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "独立 React / TypeScript / Vite 门店微应用，使用固定登记 SDK 与 opaque iframe",
+  "packageManager": "npm@11.16.0",
+  "engines": { "node": "24.18.0", "npm": "11.16.0" },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "node scripts/build.mjs",
+    "preview": "vite preview --host 127.0.0.1",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node scripts/test.mjs"
+  },
+  "dependencies": { "react": "19.3.0", "react-dom": "19.3.0" },
+  "devDependencies": { "@types/react": "19.3.0", "@types/react-dom": "19.3.0", "typescript": "5.9.3", "vite": "8.3.4" }
+}

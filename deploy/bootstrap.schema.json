@@ -1,0 +1,702 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Stores embedded bootstrap manifest",
+  "description": "Reviewed compile-time stores definition. Exactly eleven ordered menus, no default grants. Menu status declares expected availability; current menu management API does not expose a status field.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "application",
+    "oauthClient",
+    "menus",
+    "grants"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "application": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "name",
+        "icon",
+        "basePath",
+        "entryType",
+        "entryUrl",
+        "runtimeMode",
+        "autoCreateMenu",
+        "description",
+        "sortOrder",
+        "status"
+      ],
+      "properties": {
+        "code": {
+          "const": "stores"
+        },
+        "name": {
+          "type": "string"
+        },
+        "icon": {
+          "type": "string"
+        },
+        "basePath": {
+          "const": "/micro/stores"
+        },
+        "entryType": {
+          "const": "HTML"
+        },
+        "entryUrl": {
+          "const": "/sub-apps/stores/unreleased/index.html"
+        },
+        "runtimeMode": {
+          "const": "IFRAME"
+        },
+        "autoCreateMenu": {
+          "const": false
+        },
+        "description": {
+          "type": "string"
+        },
+        "sortOrder": {
+          "type": "integer",
+          "minimum": -9223372036854776000,
+          "maximum": 9223372036854776000
+        },
+        "status": {
+          "const": "ENABLED"
+        }
+      }
+    },
+    "oauthClient": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clientName",
+        "clientType",
+        "grantTypes",
+        "scopes",
+        "redirectUris",
+        "accessTokenValidity",
+        "refreshTokenValidity",
+        "provisioning"
+      ],
+      "properties": {
+        "clientName": {
+          "const": "stores-client"
+        },
+        "clientType": {
+          "const": "CONFIDENTIAL"
+        },
+        "grantTypes": {
+          "const": [
+            "client_credentials"
+          ]
+        },
+        "scopes": {
+          "const": [
+            "openid"
+          ]
+        },
+        "redirectUris": {
+          "const": []
+        },
+        "accessTokenValidity": {
+          "const": 300
+        },
+        "refreshTokenValidity": {
+          "const": 300
+        },
+        "provisioning": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "menus": {
+      "type": "array",
+      "minItems": 11,
+      "maxItems": 11,
+      "items": false,
+      "prefixItems": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key",
+            "parentKey",
+            "type",
+            "title",
+            "path",
+            "permission",
+            "sortOrder",
+            "visible",
+            "linkTarget",
+            "linkUrl",
+            "status"
+          ],
+          "properties": {
+            "key": {
+              "const": "root"
+            },
+            "parentKey": {
+              "const": null
+            },
+            "type": {
+              "const": "MENU"
+            },
+            "title": {
+              "type": "string"
+            },
+            "path": {
+              "const": "/micro/stores"
+            },
+            "permission": {
+              "const": ""
+            },
+            "sortOrder": {
+              "const": 0
+            },
+            "visible": {
+              "const": true
+            },
+            "linkTarget": {
+              "const": "MICRO"
+            },
+            "linkUrl": {
+              "const": ""
+            },
+            "status": {
+              "const": "ENABLED"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key",
+            "parentKey",
+            "type",
+            "title",
+            "path",
+            "permission",
+            "sortOrder",
+            "visible",
+            "linkTarget",
+            "linkUrl",
+            "status"
+          ],
+          "properties": {
+            "key": {
+              "const": "store:read"
+            },
+            "parentKey": {
+              "const": "root"
+            },
+            "type": {
+              "const": "MENU"
+            },
+            "title": {
+              "type": "string"
+            },
+            "path": {
+              "const": "/micro/stores/stores/:id"
+            },
+            "permission": {
+              "const": "store:read"
+            },
+            "sortOrder": {
+              "const": 1
+            },
+            "visible": {
+              "const": false
+            },
+            "linkTarget": {
+              "const": "MICRO"
+            },
+            "linkUrl": {
+              "const": ""
+            },
+            "status": {
+              "const": "ENABLED"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key",
+            "parentKey",
+            "type",
+            "title",
+            "path",
+            "permission",
+            "sortOrder",
+            "visible",
+            "linkTarget",
+            "linkUrl",
+            "status"
+          ],
+          "properties": {
+            "key": {
+              "const": "store:create"
+            },
+            "parentKey": {
+              "const": "root"
+            },
+            "type": {
+              "const": "MENU"
+            },
+            "title": {
+              "type": "string"
+            },
+            "path": {
+              "const": "/micro/stores/store-create"
+            },
+            "permission": {
+              "const": "store:create"
+            },
+            "sortOrder": {
+              "const": 2
+            },
+            "visible": {
+              "const": true
+            },
+            "linkTarget": {
+              "const": "MICRO"
+            },
+            "linkUrl": {
+              "const": ""
+            },
+            "status": {
+              "const": "ENABLED"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key",
+            "parentKey",
+            "type",
+            "title",
+            "path",
+            "permission",
+            "sortOrder",
+            "visible",
+            "linkTarget",
+            "linkUrl",
+            "status"
+          ],
+          "properties": {
+            "key": {
+              "const": "store:update"
+            },
+            "parentKey": {
+              "const": "root"
+            },
+            "type": {
+              "const": "BUTTON"
+            },
+            "title": {
+              "type": "string"
+            },
+            "path": {
+              "const": ""
+            },
+            "permission": {
+              "const": "store:update"
+            },
+            "sortOrder": {
+              "const": 3
+            },
+            "visible": {
+              "const": false
+            },
+            "linkTarget": {
+              "const": "BLANK"
+            },
+            "linkUrl": {
+              "const": ""
+            },
+            "status": {
+              "const": "ENABLED"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key",
+            "parentKey",
+            "type",
+            "title",
+            "path",
+            "permission",
+            "sortOrder",
+            "visible",
+            "linkTarget",
+            "linkUrl",
+            "status"
+          ],
+          "properties": {
+            "key": {
+              "const": "store-staff:read"
+            },
+            "parentKey": {
+              "const": "root"
+            },
+            "type": {
+              "const": "MENU"
+            },
+            "title": {
+              "type": "string"
+            },
+            "path": {
+              "const": "/micro/stores/staff"
+            },
+            "permission": {
+              "const": "store-staff:read"
+            },
+            "sortOrder": {
+              "const": 4
+            },
+            "visible": {
+              "const": true
+            },
+            "linkTarget": {
+              "const": "MICRO"
+            },
+            "linkUrl": {
+              "const": ""
+            },
+            "status": {
+              "const": "ENABLED"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key",
+            "parentKey",
+            "type",
+            "title",
+            "path",
+            "permission",
+            "sortOrder",
+            "visible",
+            "linkTarget",
+            "linkUrl",
+            "status"
+          ],
+          "properties": {
+            "key": {
+              "const": "store-staff:assign"
+            },
+            "parentKey": {
+              "const": "root"
+            },
+            "type": {
+              "const": "MENU"
+            },
+            "title": {
+              "type": "string"
+            },
+            "path": {
+              "const": "/micro/stores/staff-assign"
+            },
+            "permission": {
+              "const": "store-staff:assign"
+            },
+            "sortOrder": {
+              "const": 5
+            },
+            "visible": {
+              "const": true
+            },
+            "linkTarget": {
+              "const": "MICRO"
+            },
+            "linkUrl": {
+              "const": ""
+            },
+            "status": {
+              "const": "ENABLED"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key",
+            "parentKey",
+            "type",
+            "title",
+            "path",
+            "permission",
+            "sortOrder",
+            "visible",
+            "linkTarget",
+            "linkUrl",
+            "status"
+          ],
+          "properties": {
+            "key": {
+              "const": "store-staff:unassign"
+            },
+            "parentKey": {
+              "const": "root"
+            },
+            "type": {
+              "const": "BUTTON"
+            },
+            "title": {
+              "type": "string"
+            },
+            "path": {
+              "const": ""
+            },
+            "permission": {
+              "const": "store-staff:unassign"
+            },
+            "sortOrder": {
+              "const": 6
+            },
+            "visible": {
+              "const": false
+            },
+            "linkTarget": {
+              "const": "BLANK"
+            },
+            "linkUrl": {
+              "const": ""
+            },
+            "status": {
+              "const": "ENABLED"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key",
+            "parentKey",
+            "type",
+            "title",
+            "path",
+            "permission",
+            "sortOrder",
+            "visible",
+            "linkTarget",
+            "linkUrl",
+            "status"
+          ],
+          "properties": {
+            "key": {
+              "const": "store-daily-report:read"
+            },
+            "parentKey": {
+              "const": "root"
+            },
+            "type": {
+              "const": "MENU"
+            },
+            "title": {
+              "type": "string"
+            },
+            "path": {
+              "const": "/micro/stores/reports"
+            },
+            "permission": {
+              "const": "store-daily-report:read"
+            },
+            "sortOrder": {
+              "const": 7
+            },
+            "visible": {
+              "const": true
+            },
+            "linkTarget": {
+              "const": "MICRO"
+            },
+            "linkUrl": {
+              "const": ""
+            },
+            "status": {
+              "const": "ENABLED"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key",
+            "parentKey",
+            "type",
+            "title",
+            "path",
+            "permission",
+            "sortOrder",
+            "visible",
+            "linkTarget",
+            "linkUrl",
+            "status"
+          ],
+          "properties": {
+            "key": {
+              "const": "store-daily-report:detail"
+            },
+            "parentKey": {
+              "const": "root"
+            },
+            "type": {
+              "const": "MENU"
+            },
+            "title": {
+              "type": "string"
+            },
+            "path": {
+              "const": "/micro/stores/daily-reports/:id"
+            },
+            "permission": {
+              "const": "store-daily-report:read"
+            },
+            "sortOrder": {
+              "const": 8
+            },
+            "visible": {
+              "const": false
+            },
+            "linkTarget": {
+              "const": "MICRO"
+            },
+            "linkUrl": {
+              "const": ""
+            },
+            "status": {
+              "const": "ENABLED"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key",
+            "parentKey",
+            "type",
+            "title",
+            "path",
+            "permission",
+            "sortOrder",
+            "visible",
+            "linkTarget",
+            "linkUrl",
+            "status"
+          ],
+          "properties": {
+            "key": {
+              "const": "store-daily-report:create"
+            },
+            "parentKey": {
+              "const": "root"
+            },
+            "type": {
+              "const": "MENU"
+            },
+            "title": {
+              "type": "string"
+            },
+            "path": {
+              "const": "/micro/stores/daily-report-create"
+            },
+            "permission": {
+              "const": "store-daily-report:create"
+            },
+            "sortOrder": {
+              "const": 9
+            },
+            "visible": {
+              "const": true
+            },
+            "linkTarget": {
+              "const": "MICRO"
+            },
+            "linkUrl": {
+              "const": ""
+            },
+            "status": {
+              "const": "ENABLED"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key",
+            "parentKey",
+            "type",
+            "title",
+            "path",
+            "permission",
+            "sortOrder",
+            "visible",
+            "linkTarget",
+            "linkUrl",
+            "status"
+          ],
+          "properties": {
+            "key": {
+              "const": "store-daily-report:update"
+            },
+            "parentKey": {
+              "const": "root"
+            },
+            "type": {
+              "const": "BUTTON"
+            },
+            "title": {
+              "type": "string"
+            },
+            "path": {
+              "const": ""
+            },
+            "permission": {
+              "const": "store-daily-report:update"
+            },
+            "sortOrder": {
+              "const": 10
+            },
+            "visible": {
+              "const": false
+            },
+            "linkTarget": {
+              "const": "BLANK"
+            },
+            "linkUrl": {
+              "const": ""
+            },
+            "status": {
+              "const": "ENABLED"
+            }
+          }
+        }
+      ]
+    },
+    "grants": {
+      "type": "array",
+      "maxItems": 0
+    }
+  }
+}

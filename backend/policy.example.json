@@ -1,0 +1,24 @@
+{
+  "applications": [
+    {
+      "applicationId": "<STORES_APPLICATION_UUID>",
+      "capabilities": [
+        { "resource": "store", "action": "read", "scopes": ["SELF", "ORG", "ORG_SUBTREE", "TENANT"] },
+        { "resource": "store", "action": "create", "scopes": ["SELF", "ORG", "ORG_SUBTREE", "TENANT"] },
+        { "resource": "store", "action": "update", "scopes": ["SELF", "ORG", "ORG_SUBTREE", "TENANT"] },
+        { "resource": "store-staff", "action": "read", "scopes": ["SELF", "ORG", "ORG_SUBTREE", "TENANT"] },
+        { "resource": "store-staff", "action": "assign", "scopes": ["SELF", "ORG", "ORG_SUBTREE", "TENANT"] },
+        { "resource": "store-staff", "action": "unassign", "scopes": ["SELF", "ORG", "ORG_SUBTREE", "TENANT"] },
+        { "resource": "store-daily-report", "action": "read", "scopes": ["SELF", "ORG", "ORG_SUBTREE", "TENANT"] },
+        { "resource": "store-daily-report", "action": "create", "scopes": ["SELF", "ORG", "ORG_SUBTREE", "TENANT"] },
+        { "resource": "store-daily-report", "action": "update", "scopes": ["SELF", "ORG", "ORG_SUBTREE", "TENANT"] }
+      ],
+      "memberLookups": [
+        { "resource": "store", "action": "create" },
+        { "resource": "store", "action": "update" },
+        { "resource": "store-staff", "action": "assign" }
+      ]
+    }
+  ],
+  "managementScopes": []
+}

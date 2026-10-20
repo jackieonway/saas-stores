@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "sdkVersion": "1.0.0",
+  "contracts": {
+    "context": "1.0",
+    "microProps": "2.0",
+    "iframe": "2.0",
+    "notification": "1.0"
+  },
+  "files": [
+    {
+      "path": "capabilities.d.mts",
+      "bytes": 457,
+      "sha256": "6521a488a47c4dc5bc345e76afe6a16cbdfa0a9b4764af662b7b0b5220a14c75"
+    },
+    {
+      "path": "http.d.mts",
+      "bytes": 1119,
+      "sha256": "82c41e76d47c873dd1209b831d482b8521ace0586167083b5e7eef0b96b36c3f"
+    },
+    {
+      "path": "iframe-bridge.js",
+      "bytes": 32181,
+      "sha256": "16434ed209846c1e41f3d74f22654027289e44caf26e4d77fe1aeb0146b03ee5"
+    },
+    {
+      "path": "index.d.mts",
+      "bytes": 2517,
+      "sha256": "ae32b33ff83e9c03e86036eb431a55727497a9fc6aa4f18976df3069444120ca"
+    },
+    {
+      "path": "index.d.ts",
+      "bytes": 2517,
+      "sha256": "ae32b33ff83e9c03e86036eb431a55727497a9fc6aa4f18976df3069444120ca"
+    },
+    {
+      "path": "index.mjs",
+      "bytes": 29692,
+      "sha256": "2365b2c6cf6be201d930ae6ca1010bd59ce3f7fa4ab6a0df965189529f43c837"
+    },
+    {
+      "path": "package.json",
+      "bytes": 329,
+      "sha256": "8c0092e0cdc946d224c2f3eeacb9cf85c3b09430cf2bdb388df030a237d212af"
+    },
+    {
+      "path": "protocol.d.mts",
+      "bytes": 731,
+      "sha256": "85f87934f36befa22c2fea6e3bf96ef42ccf21c85b9e6a033d369ca271a4a9d0"
+    },
+    {
+      "path": "protocol.mjs",
+      "bytes": 824,
+      "sha256": "c443ef249b04a7d7bcabd5836b37c912d09d50813407f16bf6d73d5b56d61cee"
+    },
+    {
+      "path": "protocol.rs",
+      "bytes": 24207,
+      "sha256": "dc2ac00abb27f0eb34d3f820805e02afb7cc7e5ca9c10c6493f4c8991b38f8ed"
+    },
+    {
+      "path": "schema.json",
+      "bytes": 20332,
+      "sha256": "bdf10675d95fa3a2a6f90c7011215e6e615b5220012791217f42ac43142e7b15"
+    },
+    {
+      "path": "sdk.js",
+      "bytes": 32181,
+      "sha256": "16434ed209846c1e41f3d74f22654027289e44caf26e4d77fe1aeb0146b03ee5"
+    },
+    {
+      "path": "types.d.ts",
+      "bytes": 5138,
+      "sha256": "0890a172af89c233ee78ee6ba3e1b44c93525306e84e543946fa3f5907b9b5b7"
+    }
+  ]
+}

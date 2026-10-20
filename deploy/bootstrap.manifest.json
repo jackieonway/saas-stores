@@ -1,0 +1,176 @@
+{
+  "schemaVersion": "1.0",
+  "application": {
+    "code": "stores",
+    "name": "门店管理",
+    "icon": "Store",
+    "basePath": "/micro/stores",
+    "entryType": "HTML",
+    "entryUrl": "/sub-apps/stores/unreleased/index.html",
+    "runtimeMode": "IFRAME",
+    "autoCreateMenu": false,
+    "description": "独立门店资料、员工关联及每日营业记录；版本与授权由管理员逐步确认",
+    "sortOrder": 110,
+    "status": "ENABLED"
+  },
+  "oauthClient": {
+    "clientName": "stores-client",
+    "clientType": "CONFIDENTIAL",
+    "grantTypes": [
+      "client_credentials"
+    ],
+    "scopes": [
+      "openid"
+    ],
+    "redirectUris": [],
+    "accessTokenValidity": 300,
+    "refreshTokenValidity": 300,
+    "provisioning": "Administrator creates client in the platform UI and stores its generated clientId and one-time secret in the server secret store."
+  },
+  "menus": [
+    {
+      "key": "root",
+      "parentKey": null,
+      "type": "MENU",
+      "title": "门店管理",
+      "path": "/micro/stores",
+      "permission": "",
+      "sortOrder": 0,
+      "visible": true,
+      "linkTarget": "MICRO",
+      "linkUrl": "",
+      "status": "ENABLED"
+    },
+    {
+      "key": "store:read",
+      "parentKey": "root",
+      "type": "MENU",
+      "title": "门店详情",
+      "path": "/micro/stores/stores/:id",
+      "permission": "store:read",
+      "sortOrder": 1,
+      "visible": false,
+      "linkTarget": "MICRO",
+      "linkUrl": "",
+      "status": "ENABLED"
+    },
+    {
+      "key": "store:create",
+      "parentKey": "root",
+      "type": "MENU",
+      "title": "创建门店",
+      "path": "/micro/stores/store-create",
+      "permission": "store:create",
+      "sortOrder": 2,
+      "visible": true,
+      "linkTarget": "MICRO",
+      "linkUrl": "",
+      "status": "ENABLED"
+    },
+    {
+      "key": "store:update",
+      "parentKey": "root",
+      "type": "BUTTON",
+      "title": "更新门店",
+      "path": "",
+      "permission": "store:update",
+      "sortOrder": 3,
+      "visible": false,
+      "linkTarget": "BLANK",
+      "linkUrl": "",
+      "status": "ENABLED"
+    },
+    {
+      "key": "store-staff:read",
+      "parentKey": "root",
+      "type": "MENU",
+      "title": "门店员工",
+      "path": "/micro/stores/staff",
+      "permission": "store-staff:read",
+      "sortOrder": 4,
+      "visible": true,
+      "linkTarget": "MICRO",
+      "linkUrl": "",
+      "status": "ENABLED"
+    },
+    {
+      "key": "store-staff:assign",
+      "parentKey": "root",
+      "type": "MENU",
+      "title": "关联员工",
+      "path": "/micro/stores/staff-assign",
+      "permission": "store-staff:assign",
+      "sortOrder": 5,
+      "visible": true,
+      "linkTarget": "MICRO",
+      "linkUrl": "",
+      "status": "ENABLED"
+    },
+    {
+      "key": "store-staff:unassign",
+      "parentKey": "root",
+      "type": "BUTTON",
+      "title": "解除员工关联",
+      "path": "",
+      "permission": "store-staff:unassign",
+      "sortOrder": 6,
+      "visible": false,
+      "linkTarget": "BLANK",
+      "linkUrl": "",
+      "status": "ENABLED"
+    },
+    {
+      "key": "store-daily-report:read",
+      "parentKey": "root",
+      "type": "MENU",
+      "title": "营业记录",
+      "path": "/micro/stores/reports",
+      "permission": "store-daily-report:read",
+      "sortOrder": 7,
+      "visible": true,
+      "linkTarget": "MICRO",
+      "linkUrl": "",
+      "status": "ENABLED"
+    },
+    {
+      "key": "store-daily-report:detail",
+      "parentKey": "root",
+      "type": "MENU",
+      "title": "营业记录详情",
+      "path": "/micro/stores/daily-reports/:id",
+      "permission": "store-daily-report:read",
+      "sortOrder": 8,
+      "visible": false,
+      "linkTarget": "MICRO",
+      "linkUrl": "",
+      "status": "ENABLED"
+    },
+    {
+      "key": "store-daily-report:create",
+      "parentKey": "root",
+      "type": "MENU",
+      "title": "录入营业记录",
+      "path": "/micro/stores/daily-report-create",
+      "permission": "store-daily-report:create",
+      "sortOrder": 9,
+      "visible": true,
+      "linkTarget": "MICRO",
+      "linkUrl": "",
+      "status": "ENABLED"
+    },
+    {
+      "key": "store-daily-report:update",
+      "parentKey": "root",
+      "type": "BUTTON",
+      "title": "更新营业记录",
+      "path": "",
+      "permission": "store-daily-report:update",
+      "sortOrder": 10,
+      "visible": false,
+      "linkTarget": "BLANK",
+      "linkUrl": "",
+      "status": "ENABLED"
+    }
+  ],
+  "grants": []
+}

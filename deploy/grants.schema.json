@@ -1,0 +1,219 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Explicit stores authorization intent",
+  "description": "targets may be omitted and default to an empty array. UUIDs are normalized to lowercase. Rust additionally rejects repeated menu UUIDs, membership IDs or user/organization targets, inconsistent organization/tenant or role ownership, and repeated resource/action pairs even when scopes differ. Permissions and data grants are independent: neither implies another permission or scope. JSON input with duplicate property names is rejected before schema validation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "applicationCode",
+    "applicationId",
+    "menuIds"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "applicationCode": {
+      "const": "stores"
+    },
+    "applicationId": {
+      "$ref": "#/$defs/uuid"
+    },
+    "menuIds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "store:read",
+        "store:create",
+        "store:update",
+        "store-staff:read",
+        "store-staff:assign",
+        "store-staff:unassign",
+        "store-daily-report:read",
+        "store-daily-report:detail",
+        "store-daily-report:create",
+        "store-daily-report:update"
+      ],
+      "properties": {
+        "root": {
+          "$ref": "#/$defs/uuid"
+        },
+        "store:read": {
+          "$ref": "#/$defs/uuid"
+        },
+        "store:create": {
+          "$ref": "#/$defs/uuid"
+        },
+        "store:update": {
+          "$ref": "#/$defs/uuid"
+        },
+        "store-staff:read": {
+          "$ref": "#/$defs/uuid"
+        },
+        "store-staff:assign": {
+          "$ref": "#/$defs/uuid"
+        },
+        "store-staff:unassign": {
+          "$ref": "#/$defs/uuid"
+        },
+        "store-daily-report:read": {
+          "$ref": "#/$defs/uuid"
+        },
+        "store-daily-report:detail": {
+          "$ref": "#/$defs/uuid"
+        },
+        "store-daily-report:create": {
+          "$ref": "#/$defs/uuid"
+        },
+        "store-daily-report:update": {
+          "$ref": "#/$defs/uuid"
+        }
+      }
+    },
+    "targets": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tenantId",
+          "organizationId",
+          "roleId",
+          "userId",
+          "membershipId",
+          "permissions",
+          "dataGrants"
+        ],
+        "properties": {
+          "tenantId": {
+            "$ref": "#/$defs/uuid"
+          },
+          "organizationId": {
+            "$ref": "#/$defs/uuid"
+          },
+          "roleId": {
+            "$ref": "#/$defs/uuid"
+          },
+          "userId": {
+            "$ref": "#/$defs/uuid"
+          },
+          "membershipId": {
+            "$ref": "#/$defs/uuid"
+          },
+          "permissions": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "store:read",
+                "store:create",
+                "store:update",
+                "store-staff:read",
+                "store-staff:assign",
+                "store-staff:unassign",
+                "store-daily-report:read",
+                "store-daily-report:create",
+                "store-daily-report:update"
+              ]
+            }
+          },
+          "dataGrants": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "resource",
+                "action",
+                "scope"
+              ],
+              "properties": {
+                "resource": {
+                  "enum": [
+                    "store",
+                    "store-staff",
+                    "store-daily-report"
+                  ]
+                },
+                "action": {
+                  "enum": [
+                    "read",
+                    "create",
+                    "update",
+                    "assign",
+                    "unassign"
+                  ]
+                },
+                "scope": {
+                  "enum": [
+                    "SELF",
+                    "ORG",
+                    "ORG_SUBTREE",
+                    "TENANT"
+                  ]
+                }
+              },
+              "oneOf": [
+                {
+                  "properties": {
+                    "resource": {
+                      "const": "store"
+                    },
+                    "action": {
+                      "enum": [
+                        "read",
+                        "create",
+                        "update"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "resource": {
+                      "const": "store-staff"
+                    },
+                    "action": {
+                      "enum": [
+                        "read",
+                        "assign",
+                        "unassign"
+                      ]
+                    }
+                  }
+                },
+                {
+                  "properties": {
+                    "resource": {
+                      "const": "store-daily-report"
+                    },
+                    "action": {
+                      "enum": [
+                        "read",
+                        "create",
+                        "update"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      }
+    }
+  }
+}

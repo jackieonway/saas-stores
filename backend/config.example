@@ -1,0 +1,26 @@
+# Reference only: stores-api does NOT load this file or .env automatically.
+# Inject real values through the launching environment / secret manager.
+# Required private values are intentionally empty; this template cannot run as-is.
+STORES_DATABASE_URL=
+PLATFORM_API_ORIGIN=
+PLATFORM_CLIENT_ID=
+PLATFORM_CLIENT_SECRET=
+
+NODE_ENV=production
+STORES_HOST=127.0.0.1
+STORES_PORT=3031
+STORES_ALLOWED_ORIGINS=null
+STORES_DB_MAX_CONNECTIONS=10
+STORES_DB_ACQUIRE_TIMEOUT_MS=5000
+STORES_DB_STATEMENT_TIMEOUT_MS=5000
+STORES_DB_LOCK_TIMEOUT_MS=5000
+STORES_STARTUP_TIMEOUT_MS=30000
+STORES_SHUTDOWN_TIMEOUT_MS=10000
+STORES_HEALTH_TIMEOUT_MS=2000
+PLATFORM_AUTH_TIMEOUT_MS=3000
+PLATFORM_AUTH_MAX_CONCURRENT=32
+
+# Optional: set PLATFORM_CA_CERT_FILE to an actual absolute PEM CA file path.
+# Omit the variable when using system trust; an explicitly empty value is invalid.
+# PostgreSQL TLS is configured separately in STORES_DATABASE_URL.
+# See README.md for accepted URI parameters, budgets and production origin rules.

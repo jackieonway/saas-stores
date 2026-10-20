@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "1.0",
+  "applicationCode": "stores",
+  "applicationId": "REPLACE_WITH_STORES_APPLICATION_UUID",
+  "menuIds": {
+    "root": "REPLACE_WITH_ROOT_MENU_UUID",
+    "store:read": "REPLACE_WITH_STORE_READ_MENU_UUID",
+    "store:create": "REPLACE_WITH_STORE_CREATE_MENU_UUID",
+    "store:update": "REPLACE_WITH_STORE_UPDATE_MENU_UUID",
+    "store-staff:read": "REPLACE_WITH_STORE_STAFF_READ_MENU_UUID",
+    "store-staff:assign": "REPLACE_WITH_STORE_STAFF_ASSIGN_MENU_UUID",
+    "store-staff:unassign": "REPLACE_WITH_STORE_STAFF_UNASSIGN_MENU_UUID",
+    "store-daily-report:read": "REPLACE_WITH_STORE_DAILY_REPORT_READ_MENU_UUID",
+    "store-daily-report:detail": "REPLACE_WITH_STORE_DAILY_REPORT_DETAIL_MENU_UUID",
+    "store-daily-report:create": "REPLACE_WITH_STORE_DAILY_REPORT_CREATE_MENU_UUID",
+    "store-daily-report:update": "REPLACE_WITH_STORE_DAILY_REPORT_UPDATE_MENU_UUID"
+  },
+  "targets": []
+}
