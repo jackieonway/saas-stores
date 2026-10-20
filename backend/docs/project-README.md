@@ -3,7 +3,7 @@
 本仓库包含独立前端、Rust API、业务迁移与部署配置。构建无需平台源码或同级目录。运行时通过 HTTP 接入平台，使用独立 PostgreSQL 库与账号。
 
 ```powershell
-node scripts/check-inputs.mjs
+node backend/scripts/check-inputs.mjs
 npm --prefix frontend ci
 npm --prefix frontend run build -- --allowed-host-origin https://platform.example.com
 npm --prefix frontend test
@@ -31,7 +31,7 @@ SDK 1.0.0、纯指标协议与静态部署辅助代码已固定在仓库内；�
 
 Phase32 增加默认禁用的私有指标端点：显式设置独立 `STORES_METRICS_TOKEN` 后，从私有网络采集 `/stores-api/internal/metrics`。源码镜像从仓库根构建：`docker build -f backend/Dockerfile -t stores-api:candidate .`。固定指标协议不共享业务 SQL 或身份模型，指标含义及容量/告警限制见[监控说明](../rust-saas/deploy/monitoring/README.md)。
 
-`stores` 是工单之外的第二个独立业务消费者。当前目录包含 [React／TypeScript／Vite 前端](frontend/README.md)、[Rust API](backend/README.md)、专属 PostgreSQL 业务库，以及[公开应用／菜单登记 manifest](deploy/bootstrap.manifest.json)和[受控 grant 示例](deploy/grants.manifest.example.json)。[HTTP 契约](backend/API.md)以当前源码为准；Phase27 正式r2的Chromium／Chrome／Edge各21个必需浏览器组通过、零失败／跳过，覆盖真实平台与两业务Rust、三库、独立空缓存构建及普通用户业务操作。阶段状态及完整门禁结果见[任务台账](../../docs/architecture-optimization-ledger.md#phase-27)与[Phase27验证记录](../../docs/validation/phase-27.md)，双消费者的实际成员请求和差异见[成员契约](../../docs/stores-member-contract.md)。
+`stores` 是工单之外的第二个独立业务消费者。当前目录包含 [React／TypeScript／Vite 前端](frontend/README.md)、[Rust API](backend/README.md)、专属 PostgreSQL 业务库，以及[公开应用／菜单登记 manifest](backend/deploy/bootstrap.manifest.json)和[受控 grant 示例](backend/deploy/grants.manifest.example.json)。[HTTP 契约](backend/API.md)以当前源码为准；Phase27 正式r2的Chromium／Chrome／Edge各21个必需浏览器组通过、零失败／跳过，覆盖真实平台与两业务Rust、三库、独立空缓存构建及普通用户业务操作。阶段状态及完整门禁结果见[任务台账](../../docs/architecture-optimization-ledger.md#phase-27)与[Phase27验证记录](../../docs/validation/phase-27.md)，双消费者的实际成员请求和差异见[成员契约](../../docs/stores-member-contract.md)。
 
 后端只持有门店业务数据，以平台 HTTP 内省、实时 context 和受控成员接口取得身份与授权。平台、工单、门店使用三个独立数据库和三个专属账号，可位于同一 PostgreSQL 实例；门店账号不能查询平台身份表或工单表，也不依赖它们的 Rust 实现 crate。
 

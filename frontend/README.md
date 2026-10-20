@@ -1,10 +1,32 @@
+# 门店前端
+
+所有命令在本 frontend 目录执行。Node 24.18.0、npm 11.16.0。构建不读取 backend 或仓库根的脚本与依赖。
+
+```powershell
+npm ci
+npm run dev
+npm run build -- --allowed-host-origin https://platform.example.com
+```
+
+将 origin 替换为实际平台地址；完整业务联调需要已登记的平台应用、权限和独立业务 API。
+
+Docker 构建上下文为本目录：
+
+```powershell
+docker build -t saas-stores-web:local .
+```
+
+镜像构建需要提供 APP_CODE、APP_VERSION、HOST_ORIGIN 和 API_BASE 等公开构建参数，见 Dockerfile。
+
+---
+
 # 门店微应用前端
 
 `stores` 是独立 React／TypeScript／Vite HTML 微应用，通过登记 SDK `1.0.0` 在 opaque iframe 内消费[门店 Rust API](../backend/API.md)。应用 code 为 `stores`，宿主基路径 `/micro/stores`，API 默认前缀 `/stores-api`，没有独立登录或浏览器端 client secret。本文记录当前源码与命令；实际验收由[Phase27 台账](../../rust-saas/docs/architecture-optimization-ledger.md#phase-27)和阶段证据维护，命令清单不等于测试通过。镜像发行、公开 v1/v2 路由和联合部署归 Phase28；本阶段不抽公共 UI 框架。
 
 ## 独立安装与运行
 
-固定 Node `24.18.0`、npm `11.16.0`；React／React DOM `19.3.0`、TypeScript `5.9.3`、Vite `8.3.4` 精确锁定。本目录使用自己的 `package-lock.json`、`.npmrc` 与本地 `node_modules`。在本目录执行；以下是本机开发示例，宿主 origin 必须与实际宿主完全一致：
+固定 Node `24.18.0`、npm `11.16.0`；React／React DOM `19.3.0`、TypeScript `5.9.3`、Vite `8.3.4` 精确锁定。本目录使用自己的 `package-lock.json`、`frontend/.npmrc` 与本地 `node_modules`。在本目录执行；以下是本机开发示例，宿主 origin 必须与实际宿主完全一致：
 
 ```powershell
 npm ci
@@ -45,7 +67,7 @@ build 先执行 TypeScript 检查，覆盖前核验输出 owner，拒绝未知�
 
 ## SDK、路由与授权
 
-`src/sdk.ts` 重导出登记 SDK 运行时和类型，不手写另一份 `MicroProps`；vendor 由根 `sdk:sync` 生成，`sdk:check` 检查漂移。薄 `main.ts` 先同步安装 bridge 并连接宿主，再加载 React chunk；生命周期壳复验取消 signal，unmount 幂等。
+`src/sdk.ts` 重导出登记 SDK 运行时和类型，不手写另一份 `MicroProps`；backend/vendor 由根 `sdk:sync` 生成，`sdk:check` 检查漂移。薄 `main.ts` 先同步安装 bridge 并连接宿主，再加载 React chunk；生命周期壳复验取消 signal，unmount 幂等。
 
 业务请求通过 SDK `requestWithContext` 发送当前应用 Bearer，省略 Cookie、限制响应容量并严格校验 DTO。opaque iframe 的 API 请求带字面 `Origin:null`，匿名静态 CORS 不替代身份授权。真实授权替换、到期、401、宿主取消或卸载立即隔离旧请求和服务器视图；纯主题／同授权展示更新保留合法表单和进行中的请求。403 冻结对应 resource/action 并清除该资源旧数据，纯主题不解除拒绝。
 
@@ -78,4 +100,4 @@ build 先执行 TypeScript 检查，覆盖前核验输出 owner，拒绝未知�
 
 ## 验证边界
 
-本目录测试可用受控 HTTP 检查 client、表单隔离、取消和构建。最终普通用户验收由根 `tests/phase27-stores-browser.mjs` 使用真实平台、门店与工单 Rust 服务、三个隔离 PostgreSQL 库、生产宿主、Nginx 和正常验证 TLS；成员及业务响应不能用 mock 替代。实际命令、source hash、数量、原始失败和清理由 Phase27 证据单独记录。
+本目录测试可用受控 HTTP 检查 client、表单隔离、取消和构建。最终普通用户验收由根 `backend/acceptance/phase27-stores-browser.mjs` 使用真实平台、门店与工单 Rust 服务、三个隔离 PostgreSQL 库、生产宿主、Nginx 和正常验证 TLS；成员及业务响应不能用 mock 替代。实际命令、source hash、数量、原始失败和清理由 Phase27 证据单独记录。

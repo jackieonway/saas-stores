@@ -1,3 +1,20 @@
+# 门店后端
+
+所有命令在本 backend 目录执行。Rust 1.97.0，由 rust-toolchain.toml 固定；所有本地 Cargo 路径依赖均位于本目录内。
+
+```powershell
+cargo check --locked --all-targets
+cargo build --release --locked
+cargo run --locked
+docker build -t saas-stores-api:local .
+```
+
+运行前配置实际数据库及服务身份。业务服务的必需环境变量见下方原有配置说明；配置文件不会自动成为进程环境。
+
+后端相关部署文件位于 deploy/，补充文档位于 docs/，验收工具位于 scripts/ 和 acceptance/。固定指标协议库位于 vendor/。
+
+---
+
 # stores-api Rust 后端
 
 独立 Rust 2021 crate，使用 Axum／Tokio／SQLx／PostgreSQL，二进制为 `stores-api`，自己的 [Cargo.toml](Cargo.toml)和 `Cargo.lock`。薄 `main.rs` 只装配配置、日志、启动与退出；`lib.rs` 导出配置、业务库初始化、路由及运行入口，业务和平台适配留在私有模块。不依赖平台或工单实现 crate，不建立共享后台 crate。

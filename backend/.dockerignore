@@ -1,0 +1,9 @@
+target
+**/target
+**/node_modules
+**/.env*
+**/*.pem
+**/*.key
+**/*.log
+.integration
+docs

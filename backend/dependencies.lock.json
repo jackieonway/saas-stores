@@ -4,9 +4,9 @@
   "sourceRevision": "120c211587460f391cf30db73350188ee4ab1882",
   "sdkVersion": "1.0.0",
   "files": {
-    "vendor/operational-telemetry/Cargo.lock": "2e3b612bc2ba42434b7ddbc32446442657356364a6083b951a3c5f16ae4cdf9a",
-    "vendor/operational-telemetry/Cargo.toml": "9f3b14ff00778e84b66b085ba9aa1b56f97b742f68c6c5a00ef15cf9722b5818",
-    "vendor/operational-telemetry/src/lib.rs": "ae4fa26581d616e9301a5ed167dcea1a56c50a224e29a6c068a4248b7ec3900c",
+    "backend/vendor/operational-telemetry/Cargo.lock": "2e3b612bc2ba42434b7ddbc32446442657356364a6083b951a3c5f16ae4cdf9a",
+    "backend/vendor/operational-telemetry/Cargo.toml": "9f3b14ff00778e84b66b085ba9aa1b56f97b742f68c6c5a00ef15cf9722b5818",
+    "backend/vendor/operational-telemetry/src/lib.rs": "ae4fa26581d616e9301a5ed167dcea1a56c50a224e29a6c068a4248b7ec3900c",
     "frontend/vendor/micro-sdk/artifact-manifest.json": "d3137ecd7588e59df7151b5c533adfdc0a72eedf36138f038928538cf914b1dc",
     "frontend/vendor/micro-sdk/capabilities.d.mts": "6521a488a47c4dc5bc345e76afe6a16cbdfa0a9b4764af662b7b0b5220a14c75",
     "frontend/vendor/micro-sdk/http.d.mts": "82c41e76d47c873dd1209b831d482b8521ace0586167083b5e7eef0b96b36c3f",
@@ -21,12 +21,14 @@
     "frontend/vendor/micro-sdk/schema.json": "bdf10675d95fa3a2a6f90c7011215e6e615b5220012791217f42ac43142e7b15",
     "frontend/vendor/micro-sdk/sdk.js": "16434ed209846c1e41f3d74f22654027289e44caf26e4d77fe1aeb0146b03ee5",
     "frontend/vendor/micro-sdk/types.d.ts": "0890a172af89c233ee78ee6ba3e1b44c93525306e84e543946fa3f5907b9b5b7",
-    "deploy/bootstrap.manifest.json": "5ee2a78fb23c8b03aadf766a53545fcb427d262eaad02559cf93c075c6736dca",
-    "deploy/bootstrap.schema.json": "39b4fd3d804bcc4ea8ca489bfcf7b42400d364f35aa8f18d0ca9bd732c7e2072",
-    "deploy/build-static.mjs": "ed18e010960ccd64a655665f29405a0ae6fb89ef9fdda33bab18aff7e6355503",
-    "deploy/gateway-policy.mjs": "3fdd1d69f7898706f34a5faadfc22e6356a57fc8ddabcf5d505ea6729d00c5cc",
-    "deploy/grants.manifest.example.json": "dc0ad4aa6c6ca2c007f87fbb5d5e38616fb22c69c094c12dce30cc17a321e514",
-    "deploy/grants.schema.json": "24e35a1c2096327b8dd758d9aec0bb5c1bd989dbb7203e68e210d0f25a5c98a0",
-    "deploy/render-static.mjs": "226f7a44df10c8f164ac6a0bd4ac684ee0e50795ad51b77081ad86c2402231ae"
-  }
+    "backend/deploy/bootstrap.manifest.json": "5ee2a78fb23c8b03aadf766a53545fcb427d262eaad02559cf93c075c6736dca",
+    "backend/deploy/bootstrap.schema.json": "39b4fd3d804bcc4ea8ca489bfcf7b42400d364f35aa8f18d0ca9bd732c7e2072",
+    "frontend/deploy/build-static.mjs": "ed18e010960ccd64a655665f29405a0ae6fb89ef9fdda33bab18aff7e6355503",
+    "frontend/deploy/gateway-policy.mjs": "3fdd1d69f7898706f34a5faadfc22e6356a57fc8ddabcf5d505ea6729d00c5cc",
+    "backend/deploy/grants.manifest.example.json": "dc0ad4aa6c6ca2c007f87fbb5d5e38616fb22c69c094c12dce30cc17a321e514",
+    "backend/deploy/grants.schema.json": "24e35a1c2096327b8dd758d9aec0bb5c1bd989dbb7203e68e210d0f25a5c98a0",
+    "frontend/deploy/render-static.mjs": "226f7a44df10c8f164ac6a0bd4ac684ee0e50795ad51b77081ad86c2402231ae"
+  },
+  "layout": "frontend-backend",
+  "layoutAdaptation": "Deployment helper paths are adapted for independent frontend and backend contexts; upstream SDK and telemetry bytes are unchanged."
 }
