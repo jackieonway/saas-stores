@@ -1,0 +1,122 @@
+{
+  "applications": [
+    {
+      "applicationId": "2ffcdfa4-5e2b-4856-bba1-d44f6823749a",
+      "capabilities": [
+        {
+          "resource": "store",
+          "action": "read",
+          "scopes": [
+            "SELF",
+            "ORG",
+            "ORG_SUBTREE",
+            "TENANT"
+          ]
+        },
+        {
+          "resource": "store",
+          "action": "create",
+          "scopes": [
+            "SELF",
+            "ORG",
+            "ORG_SUBTREE",
+            "TENANT"
+          ]
+        },
+        {
+          "resource": "store",
+          "action": "update",
+          "scopes": [
+            "SELF",
+            "ORG",
+            "ORG_SUBTREE",
+            "TENANT"
+          ]
+        },
+        {
+          "resource": "store-staff",
+          "action": "read",
+          "scopes": [
+            "SELF",
+            "ORG",
+            "ORG_SUBTREE",
+            "TENANT"
+          ]
+        },
+        {
+          "resource": "store-staff",
+          "action": "assign",
+          "scopes": [
+            "SELF",
+            "ORG",
+            "ORG_SUBTREE",
+            "TENANT"
+          ]
+        },
+        {
+          "resource": "store-staff",
+          "action": "unassign",
+          "scopes": [
+            "SELF",
+            "ORG",
+            "ORG_SUBTREE",
+            "TENANT"
+          ]
+        },
+        {
+          "resource": "store-daily-report",
+          "action": "read",
+          "scopes": [
+            "SELF",
+            "ORG",
+            "ORG_SUBTREE",
+            "TENANT"
+          ]
+        },
+        {
+          "resource": "store-daily-report",
+          "action": "create",
+          "scopes": [
+            "SELF",
+            "ORG",
+            "ORG_SUBTREE",
+            "TENANT"
+          ]
+        },
+        {
+          "resource": "store-daily-report",
+          "action": "update",
+          "scopes": [
+            "SELF",
+            "ORG",
+            "ORG_SUBTREE",
+            "TENANT"
+          ]
+        }
+      ],
+      "memberLookups": [
+        {
+          "resource": "store",
+          "action": "create"
+        },
+        {
+          "resource": "store",
+          "action": "update"
+        },
+        {
+          "resource": "store-staff",
+          "action": "assign"
+        }
+      ]
+    }
+  ],
+  "managementScopes": [
+    {
+      "write": true,
+      "includeDescendants": false,
+      "organizationId": "6708fb88-6686-4af9-848d-b599047f2182",
+      "tenantId": "ec2c29dc-6d2d-4778-be7d-cadf94c47337",
+      "read": true
+    }
+  ]
+}

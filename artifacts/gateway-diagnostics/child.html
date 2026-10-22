@@ -1,0 +1,6 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>Local diagnostic child</title><script>
+const report=value=>parent.postMessage({diagnostic:value},'http://127.0.0.1:3000');
+addEventListener('error', e=>report('error: '+e.message+' '+e.filename+':'+e.lineno));
+addEventListener('unhandledrejection', e=>report('rejection: '+String(e.reason)));
+addEventListener('DOMContentLoaded',()=>report('DOM content loaded'));
+</script><script src="/sub-apps/stores/versions/1.0.1/assets/config.js" crossorigin="anonymous"></script><script type="module" crossorigin src="/sub-apps/stores/versions/1.0.1/assets/index-BcMK0PR8.js"></script></head><body><div id="app">Waiting for local diagnostic connection</div></body></html>
