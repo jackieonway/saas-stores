@@ -47,20 +47,22 @@ test('public configuration requires explicit precise secure origins and a safe A
   assert.throws(() => readPublicConfig({ version: '../outside', origins: ['https://platform.example.com'] }))
 })
 
-test('real Vite release emits a relative deferred React graph with exact source, lock and SDK provenance and no private environment', { timeout: 90000 }, t => {
+test('real Vite release emits a relative UMD React bundle with exact source, lock and SDK provenance and no private environment', { timeout: 90000 }, t => {
   const root = temporary(t), output = path.join(root, 'release'), secret = 'phase27-private-sentinel-never-public'
   const result = runBuild(output, { env: { VITE_CLIENT_SECRET: secret, DATABASE_URL: secret, STORES_CLIENT_SECRET: secret, PLATFORM_SESSION: secret } })
   assert.equal(result.status, 0, result.stdout + result.stderr)
   const json = name => JSON.parse(readFileSync(path.join(output, name), 'utf8'))
   const info = json('build-info.json'), manifest = json('asset-manifest.json')
   assert.equal(info.application, 'stores')
-  assert.equal(info.sdkVersion, '1.0.0')
+  assert.equal(info.sdkVersion, '2.0.0')
+  assert.equal(info.runtime, 'qiankun')
   assert.equal(info.contractVersion, '2.0')
   assert.equal(info.reactVersion, '19.3.0')
   assert.equal(info.reactDomVersion, '19.3.0')
   assert.equal(info.typescriptVersion, '5.9.3')
   assert.equal(info.viteVersion, '8.3.4')
-  assert.equal(info.nodeVersion, '24.18.0')
+  assert.equal(info.nodeVersion, '24.22.1')
+  assert.equal(info.version, JSON.parse(readFileSync(path.join(appRoot, 'package.json'), 'utf8')).version)
   assert.equal(info.inputCount, info.inputs.length)
   assert.equal(info.sourceSha256, sha256(JSON.stringify(info.inputs)))
   for (const input of info.inputs) {
@@ -68,22 +70,21 @@ test('real Vite release emits a relative deferred React graph with exact source,
     assert.equal(input.bytes, bytes.length, input.path)
     assert.equal(input.sha256, sha256(bytes), input.path)
   }
-  assert.ok(info.inputs.some(input => input.path === 'src/main.ts'))
+  assert.ok(info.inputs.some(input => input.path === 'src/qiankun-entry.ts'))
   assert.ok(info.inputs.some(input => input.path === 'src/app.tsx'))
   assert.ok(info.inputs.some(input => input.path === 'vendor/micro-sdk/index.mjs'))
   assert.ok(info.inputs.some(input => input.path === 'vendor/micro-sdk/index.d.mts'))
   assert.equal(info.packageLockSha256, sha256(readFileSync(path.join(appRoot, 'package-lock.json'))))
-  assert.equal(manifest['index.html'].isEntry, true)
-  assert.equal(manifest['index.html'].file, info.entry)
-  assert.deepEqual(manifest['index.html'].dynamicImports.map(key => manifest[key].file).sort(), info.dynamicChunks)
-  assert.ok(info.dynamicChunks.length > 0)
+  const entry = Object.values(manifest).find(record => record.isEntry)
+  assert.equal(entry.file, info.entry)
+  assert.deepEqual(info.dynamicChunks, [])
   const html = readFileSync(path.join(output, 'index.html'), 'utf8')
-  assert.match(html, /<script type="module"[^>]*src="\.\/assets\//)
-  assert.match(html, /<script src="\.\/assets\/config\.js" crossorigin="anonymous"><\/script>/)
+  assert.match(html, /<script entry src="\.\/assets\/micro-app\.umd\.js"><\/script>/)
+  assert.doesNotMatch(html, /type="module"|assets\/config\.js/)
   assert.doesNotMatch(html, /(?:src|href)="\/|https?:\/\//)
   for (const record of Object.values(manifest)) {
     for (const asset of [record.file, ...(record.css || [])]) {
-      assert.ok(asset.startsWith('assets/') && !asset.includes('..'))
+      assert.ok(!path.isAbsolute(asset) && !asset.includes('..'))
       assert.equal(existsSync(path.join(output, asset)), true)
     }
   }
@@ -93,26 +94,6 @@ test('real Vite release emits a relative deferred React graph with exact source,
   }
   for (const dependency of ['react', 'react-dom']) assert.equal(readFileSync(path.join(output, `assets/${dependency}.LICENSE.txt`), 'utf8'), readFileSync(path.join(appRoot, `node_modules/${dependency}/LICENSE`), 'utf8'))
 
-  // Execute the actual production entry graph and transfer the host's single
-  // connection port immediately. No React chunk may be requested to get READY.
-  const probe = spawnSync(process.execPath, ['--experimental-vm-modules', '--input-type=module', '-e', `
-    import assert from 'node:assert/strict'; import vm from 'node:vm'; import {readFileSync} from 'node:fs'; import {fileURLToPath,pathToFileURL} from 'node:url';
-    const listeners=new Map(), messages=[], parent={}, container={}; let dynamicImports=0;
-    const window={fetch,Headers,URL,AbortController,DOMException,TextEncoder,TextDecoder,ReadableStream,Response,crypto,MessageChannel,parent,postMessage(){},
-      __STORES_CONFIG__:{version:'1.0.0',allowedHostOrigins:['https://platform.example.com'],apiBase:'/stores-api'},
-      addEventListener(type,fn){listeners.set(type,fn)},removeEventListener(type,fn){if(listeners.get(type)===fn)listeners.delete(type)}};
-    const document={createElement(){return {relList:{supports:()=>true}}},querySelector(){return container}};
-    const context=vm.createContext({window,document,fetch,Headers,URL,AbortController,DOMException,TextEncoder,TextDecoder,ReadableStream,Response,crypto,MessageChannel,setTimeout,clearTimeout,console});
-    const modules=new Map(); function load(url){if(modules.has(url))return modules.get(url);const m=new vm.SourceTextModule(readFileSync(fileURLToPath(url),'utf8'),{context,identifier:url,initializeImportMeta(meta){meta.url=url},importModuleDynamically(){dynamicImports++;throw Error('business imported before context')}});modules.set(url,m);return m;}
-    const entry=load(pathToFileURL(process.argv[1]).href);await entry.link((specifier,ref)=>load(new URL(specifier,ref.identifier).href));await entry.evaluate();
-    assert.equal(dynamicImports,0);assert.equal(typeof listeners.get('message'),'function');
-    const port={postMessage(message){messages.push(message)},start(){},close(){}};
-    listeners.get('message')({source:parent,origin:'https://platform.example.com',ports:[port],data:{kind:'MICRO_CONNECT',appCode:'stores',contractVersion:'2.0',nonce:'phase27-build-port-connection',contextEpoch:1}});
-    assert.equal(messages[0]?.kind,'MICRO_READY');assert.equal(messages[0]?.appCode,'stores');assert.equal(dynamicImports,0);
-    listeners.get('pagehide')(); console.log('production-entry-single-port-ready');
-  `, path.join(output, info.entry)], { encoding: 'utf8', windowsHide: true, timeout: 15000 })
-  assert.equal(probe.status, 0, probe.stdout + probe.stderr)
-  assert.match(probe.stdout, /production-entry-single-port-ready/)
   writeFileSync(path.join(output, 'obsolete-owned-asset.txt'), 'previous owned release')
   const rebuilt = runBuild(output, { args: ['--version', '1.0.1-rebuild'] })
   assert.equal(rebuilt.status, 0, rebuilt.stdout + rebuilt.stderr)
@@ -156,6 +137,6 @@ test('a copied standalone frontend installs from an empty owned npm cache and bu
   for (const dependency of ['react', 'react-dom', 'typescript', 'vite']) assert.ok(realpathSync(require.resolve(dependency)).startsWith(path.join(realpathSync(copy), 'node_modules') + path.sep), dependency)
   const build = spawnSync(process.execPath, [npmCli, 'run', 'build'], { cwd: copy, encoding: 'utf8', windowsHide: true, timeout: 90000, env })
   assert.equal(build.status, 0, build.stdout + build.stderr)
-  assert.equal(JSON.parse(readFileSync(path.join(copy, 'dist/build-info.json'), 'utf8')).sdkVersion, '1.0.0')
+  assert.equal(JSON.parse(readFileSync(path.join(copy, 'dist/build-info.json'), 'utf8')).sdkVersion, '2.0.0')
   assert.equal(existsSync(path.join(copy, 'dist/index.html')), true)
 })

@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { StoresController, type Form, type FormKind } from './controller.ts'
 import { canRoute, canMemberLookup } from './domain.ts'
 import type { Operation, Store, DailyReport, MemberPurpose } from './domain.ts'
-import type { MicroLifecycle } from './sdk.ts'
+import type { RenderLifecycle } from './qiankun-lifecycle.ts'
 import './styles.css'
 
 const base = '/micro/stores'
@@ -164,14 +164,13 @@ function App({ controller }: { controller: StoresController }) {
   </div>
 }
 
-export function createLifecycle(_bridge: unknown): MicroLifecycle {
+export function createLifecycle(configuration: { apiBase: string }): RenderLifecycle {
   let root: Root | null = null, controller: StoresController | null = null
   return {
-    name: 'stores',
     mount(container, props) {
       if (root) return
-      const config = (window as unknown as { __STORES_CONFIG__?: { apiBase?: string } }).__STORES_CONFIG__
-      controller = new StoresController({ apiBase: config?.apiBase })
+      container.setAttribute('data-stores-root', '')
+      controller = new StoresController({ apiBase: configuration.apiBase })
       controller.setContext(props); root = createRoot(container); root.render(<App controller={controller} />)
     },
     update(props) { controller?.setContext(props) },

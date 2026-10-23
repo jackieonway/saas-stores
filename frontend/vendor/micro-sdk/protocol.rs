@@ -4,13 +4,11 @@
 
 use serde::{Deserialize, Serialize};
 /// The only registered SDK release; wire contract majors remain independently versioned.
-pub const SDK_VERSION: &str = "1.0.0";
+pub const SDK_VERSION: &str = "2.0.0";
 /// Context wire contract supported by this release.
 pub const CONTEXT_VERSION: &str = "1.0";
 /// Props wire contract supported by this release.
 pub const MICRO_PROPS_VERSION: &str = "2.0";
-/// Iframe channel contract supported by this release.
-pub const IFRAME_VERSION: &str = "2.0";
 /// Notification wire contract supported by this release.
 pub const NOTIFICATION_VERSION: &str = "1.0";
 /// Maximum bounded public JSON response bytes.
@@ -21,8 +19,8 @@ pub const ORGANIZATION_LIMIT: usize = 10000;
 /// Public wire type generated from `$defs.SDKVersion`; validation is separate from authorization.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SDKVersion {
-    #[serde(rename = "1.0.0")]
-    V1Dot0Dot0,
+    #[serde(rename = "2.0.0")]
+    V2Dot0Dot0,
 }
 
 /// Public wire type generated from `$defs.ContextContractVersion`; validation is separate from authorization.
@@ -49,8 +47,6 @@ pub enum NotificationContractVersion {
 /// Public wire type generated from `$defs.MicroEntryType`; validation is separate from authorization.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MicroEntryType {
-    #[serde(rename = "ESM")]
-    Esm,
     #[serde(rename = "HTML")]
     Html,
 }
@@ -58,8 +54,6 @@ pub enum MicroEntryType {
 /// Public wire type generated from `$defs.MicroRuntimeMode`; validation is separate from authorization.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MicroRuntimeMode {
-    #[serde(rename = "IFRAME")]
-    Iframe,
     #[serde(rename = "TRUSTED")]
     Trusted,
 }

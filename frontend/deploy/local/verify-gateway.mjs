@@ -2,6 +2,7 @@
 // Overrides: STORES_GATEWAY_ORIGIN, PLATFORM_DEV_ORIGIN, STORES_RELEASE_VERSION,
 // STORES_GATEWAY_TIMEOUT_MS. No credentials, database access or browser state needed.
 import assert from 'node:assert/strict'
+import { requireReleaseVersion, verifyReleaseMetadata, verifyReleaseHtml, verifyPublishedMarker, verifyUmdLifecycle } from '../verify-release.mjs'
 
 function origin(value, label) {
   let parsed
@@ -14,8 +15,7 @@ function origin(value, label) {
 
 const gateway = origin(process.env.STORES_GATEWAY_ORIGIN || 'http://127.0.0.1:3000', 'STORES_GATEWAY_ORIGIN')
 const platform = origin(process.env.PLATFORM_DEV_ORIGIN || 'http://127.0.0.1:3002', 'PLATFORM_DEV_ORIGIN')
-const version = process.env.STORES_RELEASE_VERSION || '1.0.1'
-if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(version) || version.includes('..')) throw new Error('Invalid STORES_RELEASE_VERSION')
+const version = requireReleaseVersion(process.env.STORES_RELEASE_VERSION)
 const timeout = Number(process.env.STORES_GATEWAY_TIMEOUT_MS || 10000)
 if (!Number.isInteger(timeout) || timeout < 100 || timeout > 60000) throw new Error('Invalid STORES_GATEWAY_TIMEOUT_MS')
 const releasePath = `/sub-apps/stores/versions/${version}/`
@@ -68,19 +68,19 @@ await check('public platform HTML', async () => {
 await check('public platform API health', () => jsonHealth('/api/health', { status: 'UP', database: 'UP' }))
 await check('public stores readiness', () => jsonHealth('/stores-api/health/ready', { status: 'ok', service: 'stores-api' }))
 await check('unauthenticated business API is denied', async () => {
-  const result = await response(gateway, '/stores-api/stores', { headers: { Origin: 'null' } })
+  const result = await response(gateway, '/stores-api/stores', { headers: { Origin: gateway } })
   assert.equal(result.status, 401, 'Unauthenticated stores request must return 401')
   assert.equal(type(result), 'application/json', 'Business error must be JSON, not a platform SPA fallback')
-  assert.equal(result.headers.get('access-control-allow-origin'), 'null', 'Allowed iframe origin must remain readable')
+  assert.equal(result.headers.get('access-control-allow-origin'), gateway, 'Allowed host origin must remain readable')
   await result.body?.cancel()
 })
-await check('opaque iframe preflight reaches the business API', async () => {
+await check('host-origin preflight reaches the business API', async () => {
   const result = await response(gateway, '/stores-api/stores', { method: 'OPTIONS', headers: {
-    Origin: 'null', 'Access-Control-Request-Method': 'POST',
+    Origin: gateway, 'Access-Control-Request-Method': 'POST',
     'Access-Control-Request-Headers': 'authorization,content-type,x-request-id',
   } })
   assert.equal(result.status, 204, 'Allowed preflight must return 204')
-  assert.equal(result.headers.get('access-control-allow-origin'), 'null', 'Preflight must allow only the requested configured origin')
+  assert.equal(result.headers.get('access-control-allow-origin'), gateway, 'Preflight must allow only the requested configured origin')
   assert.match(result.headers.get('access-control-allow-methods') || '', /(?:^|,\s*)POST(?:,|$)/, 'POST missing from allowed methods')
   const allowed = (result.headers.get('access-control-allow-headers') || '').toLowerCase().split(',').map(value => value.trim())
   for (const required of ['authorization', 'content-type', 'x-request-id']) assert.ok(allowed.includes(required), 'Required request header missing')
@@ -102,14 +102,20 @@ await check('private business routes are hidden by the public gateway', async ()
   }
 })
 await check('versioned HTML and JS/CSS are served independently', async () => {
-  const result = await response(gateway, indexPath, { headers: { Origin: 'null' } })
+  const result = await response(gateway, indexPath, { headers: { Origin: gateway } })
   assert.equal(result.status, 200, 'Release index must return 200')
   assert.equal(type(result), 'text/html', 'Release index must have an HTML MIME type')
-  assert.equal(result.headers.get('access-control-allow-origin'), '*', 'Public static HTML must support iframe loading')
+  assert.equal(result.headers.get('access-control-allow-origin'), '*', 'Public static HTML must support host loading')
   assert.match(result.headers.get('cache-control') || '', /no-cache/, 'HTML must revalidate')
   const html = await body(result)
-  assert.match(html, /<div\s+[^>]*id=["']app["']/i, 'Stores app root is missing')
-  const assets = new Set(Array.from(html.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["']/gi), match => releaseUrl(match[1])))
+  const metadataResult = await response(gateway, `${releasePath}build-info.json`)
+  assert.equal(metadataResult.status, 200, 'Release build-info must return 200')
+  assert.equal(type(metadataResult), 'application/json', 'Release build-info must be JSON')
+  const info = verifyReleaseMetadata(JSON.parse(await body(metadataResult)), version)
+  const markerResult = await response(gateway, `${releasePath}release-complete.json`)
+  assert.equal(markerResult.status, 200, 'Published release completion marker must return 200')
+  verifyPublishedMarker(JSON.parse(await body(markerResult)), info)
+  const assets = new Set(verifyReleaseHtml(html, info).map(releaseUrl))
   const manifestResult = await response(gateway, `${releasePath}asset-manifest.json`)
   assert.equal(manifestResult.status, 200, 'Release asset manifest must return 200')
   const manifest = JSON.parse(await body(manifestResult))
@@ -121,12 +127,14 @@ await check('versioned HTML and JS/CSS are served independently', async () => {
   assert.ok([...assets].some(path => path.endsWith('.css')), 'Business CSS asset is missing')
   assert.ok(assets.size <= 48, 'Too many resources for the smoke check')
   for (const path of assets) {
-    const asset = await response(gateway, path, { headers: { Origin: 'null' } })
+    const asset = await response(gateway, path, { headers: { Origin: gateway } })
     assert.equal(asset.status, 200, 'Versioned asset must return 200')
     assert.ok(path.endsWith('.css') ? type(asset) === 'text/css' : ['application/javascript', 'text/javascript'].includes(type(asset)), 'Asset has the wrong MIME type')
-    assert.equal(asset.headers.get('access-control-allow-origin'), '*', 'Opaque iframe assets need public CORS')
+    assert.equal(asset.headers.get('access-control-allow-origin'), '*', 'qiankun assets need host-readable CORS')
     assert.match(asset.headers.get('cache-control') || '', /immutable/, 'Versioned assets must be immutable')
-    assert.ok((await body(asset)).length > 0, 'Versioned asset is empty')
+    const content = await body(asset)
+    assert.ok(content.length > 0, 'Versioned asset is empty')
+    if (path === releaseUrl(info.entry)) verifyUmdLifecycle(content)
   }
 })
 await check('missing versioned asset stays 404', async () => {

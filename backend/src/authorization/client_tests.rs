@@ -14,6 +14,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use super::*;
+use crate::authorization::tests::test_http::NodePeer;
 
 const TOKEN: &str = "APP/TOKEN+NOT_FOR_LOGS";
 const SECRET: &str = "CLIENT_SECRET_NOT_FOR_LOGS";
@@ -91,6 +92,7 @@ struct HttpPeer {
     requests: Arc<Mutex<Vec<CapturedRequest>>>,
     stopped: Arc<AtomicBool>,
     worker: Option<thread::JoinHandle<()>>,
+    _node: Option<NodePeer>,
 }
 
 impl HttpPeer {
@@ -99,6 +101,26 @@ impl HttpPeer {
     }
 
     fn with_delayed_tail(reply: Vec<u8>, tail: Option<(Duration, Vec<u8>)>) -> Self {
+        if NodePeer::enabled() {
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let observed = requests.clone();
+            let node = NodePeer::start(move |request| {
+                observed.lock().unwrap().push(CapturedRequest {
+                    method: request.method,
+                    target: request.target,
+                    headers: request.headers,
+                    body: request.body,
+                });
+                (reply.clone(), tail.clone())
+            });
+            return Self {
+                origin: node.origin.clone(),
+                requests,
+                stopped: Arc::new(AtomicBool::new(false)),
+                worker: None,
+                _node: Some(node),
+            };
+        }
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
@@ -137,6 +159,7 @@ impl HttpPeer {
             requests,
             stopped,
             worker: Some(worker),
+            _node: None,
         }
     }
 

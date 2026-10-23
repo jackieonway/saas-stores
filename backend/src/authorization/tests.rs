@@ -3,6 +3,9 @@ use uuid::Uuid;
 
 use super::*;
 
+#[path = "test_http.rs"]
+pub(crate) mod test_http;
+
 const USER: &str = "11111111-1111-4111-8111-111111111111";
 const TENANT: &str = "22222222-2222-4222-8222-222222222222";
 const ORG: &str = "33333333-3333-4333-8333-333333333333";
@@ -326,21 +329,33 @@ async fn fixture(
         calls: AtomicUsize::new(0),
         headers: Mutex::new(Vec::new()),
     });
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let origin = format!("http://{}", listener.local_addr().unwrap());
     let app = Router::new()
         .route("/oauth/introspect", post(fixture_response))
         .route("/api/apps/stores/context", get(fixture_response))
         .with_state(state.clone());
-    let server = tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
+    let (origin, server) = if test_http::NodePeer::enabled() {
+        let peer = test_http::NodePeer::router(app);
+        let origin = peer.origin.clone();
+        let server = tokio::spawn(async move {
+            let _peer = peer;
+            std::future::pending::<()>().await;
+        });
+        (origin, server)
+    } else {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (origin, server)
+    };
     let config = Config::from_pairs([
         (
             "STORES_DATABASE_URL",
             "postgresql://worker:secret@127.0.0.1/orders",
         ),
         ("PLATFORM_API_ORIGIN", &origin),
+        ("STORES_ALLOWED_ORIGINS", "https://platform.example.test"),
         ("PLATFORM_CLIENT_ID", "client"),
         ("PLATFORM_AUTHORIZATION_MODE", "legacy"),
         ("PLATFORM_CLIENT_SECRET", "secret"),
@@ -447,10 +462,13 @@ async fn shared_authorization_budget_and_concurrency_bound_do_not_queue_requests
 
 #[test]
 fn protected_application_requires_platform_configuration() {
-    let config = Config::from_pairs([(
-        "STORES_DATABASE_URL",
-        "postgresql://worker:secret@127.0.0.1/orders",
-    )])
+    let config = Config::from_pairs([
+        (
+            "STORES_DATABASE_URL",
+            "postgresql://worker:secret@127.0.0.1/orders",
+        ),
+        ("STORES_ALLOWED_ORIGINS", "https://platform.example.test"),
+    ])
     .unwrap();
     let error = Authorizer::new(&config).err().unwrap();
     assert_eq!(

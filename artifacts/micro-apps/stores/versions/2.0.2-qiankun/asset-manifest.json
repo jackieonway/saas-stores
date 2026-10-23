@@ -1,0 +1,12 @@
+{
+  "src/qiankun-entry.ts": {
+    "file": "assets/micro-app.umd.js",
+    "name": "qiankun-entry",
+    "src": "src/qiankun-entry.ts",
+    "isEntry": true
+  },
+  "style.css": {
+    "file": "micro-app.css",
+    "src": "style.css"
+  }
+}

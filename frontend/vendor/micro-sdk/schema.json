@@ -5,7 +5,7 @@
   "$defs": {
     "SDKVersion": {
       "type": "string",
-      "const": "1.0.0"
+      "const": "2.0.0"
     },
     "ContextContractVersion": {
       "type": "string",
@@ -22,14 +22,12 @@
     "MicroEntryType": {
       "type": "string",
       "enum": [
-        "ESM",
         "HTML"
       ]
     },
     "MicroRuntimeMode": {
       "type": "string",
       "enum": [
-        "IFRAME",
         "TRUSTED"
       ]
     },

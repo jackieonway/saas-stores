@@ -15,7 +15,7 @@ export const menuDefinitions = [
 ]
 export function context(overrides = {}) {
   return {
-    sdkVersion: '1.0.0', contractVersion: '2.0', appCode: 'stores', basePath: '/micro/stores',
+    sdkVersion: '2.0.0', contractVersion: '2.0', appCode: 'stores', basePath: '/micro/stores',
     contextVersion: 'a'.repeat(64), contextEpoch: 1, routePath: '/micro/stores',
     token: 'test-app-bearer', expiresAt: new Date(Date.now() + 60000).toISOString(),
     tokenExpiresAt: new Date(Date.now() + 120000).toISOString(),

@@ -21,6 +21,7 @@ use crate::error::ConfigError;
 /// let config = Config::from_pairs([
 ///     ("STORES_DATABASE_URL", "postgresql://worker:example@127.0.0.1/stores"),
 ///     ("STORES_HOST", "127.0.0.1"),
+///     ("STORES_ALLOWED_ORIGINS", "https://platform.example.com"),
 /// ])?;
 /// assert_eq!(config.bind_address().port(), 3031);
 /// # Ok::<(), stores_api::ConfigError>(())
@@ -100,17 +101,13 @@ impl Config {
         };
         let platform = platform_config(&get, production)?;
         let allowed_origins = get("STORES_ALLOWED_ORIGINS")
-            .unwrap_or_else(|| "null".into())
+            .ok_or(ConfigError::AllowedOrigin)?
             .split(',')
             .map(|raw| {
                 let raw = raw.trim();
-                if raw == "null" {
-                    Ok(raw.to_owned())
-                } else {
-                    exact_origin(raw, production)
-                        .map(|url| url.origin().ascii_serialization())
-                        .map_err(|_| ConfigError::AllowedOrigin)
-                }
+                exact_origin(raw, production)
+                    .map(|url| url.origin().ascii_serialization())
+                    .map_err(|_| ConfigError::AllowedOrigin)
             })
             .collect::<Result<std::collections::BTreeSet<_>, _>>()?
             .into_iter()
@@ -318,7 +315,12 @@ mod tests {
 
     fn config(extra: &[(&str, &str)]) -> Result<Config, ConfigError> {
         Config::from_pairs(
-            std::iter::once(("STORES_DATABASE_URL", URL)).chain(extra.iter().copied()),
+            [
+                ("STORES_DATABASE_URL", URL),
+                ("STORES_ALLOWED_ORIGINS", "https://platform.example.test"),
+            ]
+            .into_iter()
+            .chain(extra.iter().copied()),
         )
     }
     #[test]
@@ -390,6 +392,7 @@ mod tests {
             "STORES_DATABASE_URL" => Some(URL.into()),
             "STORES_HOST" => Some("127.0.0.1".into()),
             "STORES_PORT" => Some("0".into()),
+            "STORES_ALLOWED_ORIGINS" => Some("https://platform.example.test".into()),
             "WORK_ORDERS_PORT" => Some("1".into()),
             "DATABASE_URL" => Some("malformed global database value".into()),
             _ => None,
@@ -397,7 +400,7 @@ mod tests {
         .unwrap();
         assert_eq!(cfg.bind_address(), "127.0.0.1:0".parse().unwrap());
         assert!(cfg.platform.is_none());
-        assert_eq!(cfg.allowed_origins, ["null"]);
+        assert_eq!(cfg.allowed_origins, ["https://platform.example.test"]);
     }
 
     #[test]
@@ -477,6 +480,7 @@ mod tests {
             let cfg = Config::from_pairs([
                 ("STORES_DATABASE_URL", uri.as_str()),
                 ("NODE_ENV", "production"),
+                ("STORES_ALLOWED_ORIGINS", "https://platform.example.test"),
             ])
             .unwrap();
             assert_eq!(
@@ -579,16 +583,55 @@ mod tests {
         }
         assert!(exact_origin("http://127.0.0.1:3000", true).is_err());
         assert!(exact_origin("https://platform.test", true).is_ok());
-        let allowed =
-            config(&[("STORES_ALLOWED_ORIGINS", "null,https://frontend.test,null")]).unwrap();
-        assert_eq!(allowed.allowed_origins, ["https://frontend.test", "null"]);
+        let allowed = config(&[(
+            "STORES_ALLOWED_ORIGINS",
+            "https://frontend.test,https://frontend.test",
+        )])
+        .unwrap();
+        assert_eq!(allowed.allowed_origins, ["https://frontend.test"]);
         for origins in [
             "",
+            "null",
             "null,",
+            "https://frontend.test,null",
+            "*",
             "https://frontend.test/",
             "http://internal.test",
         ] {
             assert!(config(&[("STORES_ALLOWED_ORIGINS", origins)]).is_err());
+        }
+    }
+
+    #[test]
+    fn browser_origins_are_explicit_in_every_environment_and_never_opaque() {
+        for production in [false, true] {
+            let mode = if production {
+                "production"
+            } else {
+                "development"
+            };
+            let missing = Config::from_pairs([("STORES_DATABASE_URL", URL), ("NODE_ENV", mode)]);
+            assert_eq!(missing.unwrap_err(), ConfigError::AllowedOrigin);
+            for rejected in ["", "null", "*", "https://platform.test/"] {
+                assert_eq!(
+                    config(&[("NODE_ENV", mode), ("STORES_ALLOWED_ORIGINS", rejected)])
+                        .unwrap_err(),
+                    ConfigError::AllowedOrigin
+                );
+            }
+            assert!(config(&[
+                ("NODE_ENV", mode),
+                ("STORES_ALLOWED_ORIGINS", "https://platform.test"),
+            ])
+            .is_ok());
+            assert_eq!(
+                config(&[
+                    ("NODE_ENV", mode),
+                    ("STORES_ALLOWED_ORIGINS", "http://127.0.0.1:3000"),
+                ])
+                .is_ok(),
+                !production
+            );
         }
     }
 }

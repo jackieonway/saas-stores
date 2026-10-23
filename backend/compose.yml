@@ -21,7 +21,7 @@ services:
       STORES_HOST: 0.0.0.0
       STORES_PORT: '3031'
       STORES_DATABASE_URL: ${STORES_DATABASE_URL:?Set the dedicated business database URL}
-      STORES_ALLOWED_ORIGINS: 'null'
+      STORES_ALLOWED_ORIGINS: ${STORES_ALLOWED_ORIGINS:?Set the exact public platform HTTPS origin}
       STORES_METRICS_TOKEN: ${STORES_METRICS_TOKEN:-}
       PLATFORM_API_ORIGIN: ${PLATFORM_API_ORIGIN:?Set the real platform HTTPS origin}
       PLATFORM_CLIENT_ID: ${PLATFORM_CLIENT_ID:?Set this application's confidential client ID}

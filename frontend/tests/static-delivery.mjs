@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { preview } from 'vite'
 import { createStoresConfig, readPublicConfig } from '../vite.config.mjs'
 
-test('version-prefixed static HTTP serves anonymous Origin:null ESM/chunks/CSS and preserves missing-resource 404', { timeout: 90000 }, async t => {
+test('version-prefixed static HTTP serves classic UMD/CSS to the host and preserves missing-resource 404', { timeout: 90000 }, async t => {
   const temporary = realpathSync(os.tmpdir()), root = realpathSync(mkdtempSync(path.join(temporary, 'platform-stores-static-')))
   t.after(() => {
     assert.equal(path.dirname(root), temporary)
@@ -36,7 +36,7 @@ test('version-prefixed static HTTP serves anonymous Origin:null ESM/chunks/CSS a
   for (const resource of new Set(urls)) {
     const url = new URL(resource, base)
     assert.ok(url.pathname.startsWith(prefix))
-    const response = await fetch(url, { headers: { Origin: 'null' }, credentials: 'omit' })
+    const response = await fetch(url, { headers: { Origin: 'https://platform.example.com' }, credentials: 'omit' })
     assert.equal(response.status, 200, resource)
     assert.equal(response.headers.get('access-control-allow-origin'), '*')
     assert.equal(response.headers.get('access-control-allow-credentials'), null)
@@ -45,7 +45,7 @@ test('version-prefixed static HTTP serves anonymous Origin:null ESM/chunks/CSS a
     assert.equal(await response.text(), readFileSync(path.join(outDir, resource), 'utf8'))
   }
   for (const missing of ['assets/missing.js', 'assets/missing.css', 'missing.html', 'stores/arbitrary']) {
-    const response = await fetch(new URL(missing, base), { headers: { Accept: 'text/html', Origin: 'null' } })
+    const response = await fetch(new URL(missing, base), { headers: { Accept: 'text/html', Origin: 'https://platform.example.com' } })
     assert.equal(response.status, 404, missing)
     assert.ok(!(await response.text()).includes('正在连接当前组织的门店空间'))
   }

@@ -1,6 +1,6 @@
 {
   "name": "@saas-platform/micro-app-sdk",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "exports": {
@@ -8,7 +8,7 @@
       "types": "./index.d.mts",
       "import": "./index.mjs"
     },
-    "./iframe-bridge.js": "./iframe-bridge.js",
+    "./sdk.js": "./sdk.js",
     "./schema.json": "./schema.json",
     "./protocol.rs": "./protocol.rs"
   }

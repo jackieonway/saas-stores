@@ -8,6 +8,47 @@ use stores_api::initialize_database;
 use tokio::sync::Barrier;
 use uuid::Uuid;
 
+fn owned_server(url: &url::Url, owner: &str, local_owner: Option<&str>) -> bool {
+    let Some(local_owner) = local_owner else {
+        return url.host_str() == Some(format!("{owner}-postgres").as_str());
+    };
+    let (Some(host), Some(port)) = (url.host_str(), url.port()) else {
+        return false;
+    };
+    matches!(host, "127.0.0.1" | "[::1]")
+        && port >= 1024
+        && port != 5432
+        && local_owner == format!("{owner}@{host}:{port}")
+}
+
+#[test]
+fn local_database_opt_in_is_bound_to_the_owner_and_non_default_loopback_endpoint() {
+    let owner = "ci-owned-contract";
+    let parse =
+        |host: &str| url::Url::parse(&format!("postgresql://fixture@{host}/postgres")).unwrap();
+    assert!(owned_server(
+        &parse("ci-owned-contract-postgres"),
+        owner,
+        None
+    ));
+    assert!(!owned_server(&parse("127.0.0.1:45432"), owner, None));
+    assert!(owned_server(
+        &parse("127.0.0.1:45432"),
+        owner,
+        Some("ci-owned-contract@127.0.0.1:45432")
+    ));
+    for (host, marker) in [
+        ("127.0.0.1:5432", "ci-owned-contract@127.0.0.1:5432"),
+        ("127.0.0.1", "ci-owned-contract@127.0.0.1:5432"),
+        ("127.0.0.1:45432", "ci-other@127.0.0.1:45432"),
+        ("127.0.0.1:45432", "ci-owned-contract@127.0.0.1:45433"),
+        ("192.168.1.2:45432", "ci-owned-contract@192.168.1.2:45432"),
+        ("localhost:45432", "ci-owned-contract@localhost:45432"),
+    ] {
+        assert!(!owned_server(&parse(host), owner, Some(marker)));
+    }
+}
+
 async fn owned<F, Fut>(case: F)
 where
     F: FnOnce(PgPool) -> Fut + Send + 'static,
@@ -19,7 +60,9 @@ where
         owner.starts_with("ci-") && owner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
     );
     let mut url = url::Url::parse(&raw).expect("valid owned URL");
-    assert_eq!(url.host_str(), Some(format!("{owner}-postgres").as_str()));
+    // Never infer local ownership from an ordinary development database URL.
+    let local_owner = std::env::var("STORES_TEST_LOCAL_POSTGRES_OWNER").ok();
+    assert!(owned_server(&url, &owner, local_owner.as_deref()));
     assert_eq!(url.path(), "/postgres");
     let admin = PgPoolOptions::new()
         .max_connections(2)

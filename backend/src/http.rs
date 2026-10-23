@@ -48,7 +48,7 @@ struct RequestId(String);
 /// This compatibility surface has no platform credentials. Business operations
 /// return a fixed unavailable response; use [`application`] to serve them.
 pub fn router(pool: PgPool, health_timeout: Duration) -> Router {
-    configured_router(pool, health_timeout, None, vec!["null".into()])
+    configured_router(pool, health_timeout, None, vec![])
 }
 
 /// Construct the authenticated store/staff/report API.
@@ -472,7 +472,12 @@ mod tests {
             .acquire_timeout(Duration::from_millis(25))
             .connect_lazy("postgresql://stores_unit:synthetic_password@127.0.0.1:1/stores_unit")
             .unwrap();
-        router(pool, Duration::from_millis(20))
+        configured_router(
+            pool,
+            Duration::from_millis(20),
+            None,
+            vec!["https://platform.example.test".into()],
+        )
     }
 
     #[tokio::test]
@@ -506,13 +511,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn opaque_preflight_has_metadata_without_credentials() {
+    async fn qiankun_host_preflight_has_metadata_without_credentials() {
         let response = app()
             .oneshot(
                 Request::builder()
                     .method("OPTIONS")
                     .uri("/stores-api/stores")
-                    .header("origin", "null")
+                    .header("origin", "https://platform.example.test")
                     .header("access-control-request-method", "POST")
                     .header(
                         "access-control-request-headers",
@@ -524,7 +529,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
-        assert_eq!(response.headers()["access-control-allow-origin"], "null");
+        assert_eq!(
+            response.headers()["access-control-allow-origin"],
+            "https://platform.example.test"
+        );
         assert!(!response
             .headers()
             .contains_key("access-control-allow-credentials"));
@@ -532,10 +540,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn qiankun_host_write_reaches_bearer_authentication_while_opaque_origin_is_denied() {
+        for (origin, status, code) in [
+            ("https://platform.example.test", 401, "INVALID_APP_TOKEN"),
+            ("null", 403, "ORIGIN_DENIED"),
+            ("https://outside.invalid", 403, "ORIGIN_DENIED"),
+        ] {
+            let response = app()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/stores-api/stores")
+                        .header("origin", origin)
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), status);
+            assert_eq!(
+                response
+                    .headers()
+                    .get("access-control-allow-origin")
+                    .is_some(),
+                status == 401
+            );
+            let body = to_bytes(response.into_body(), 4096).await.unwrap();
+            assert_eq!(
+                serde_json::from_slice::<Value>(&body).unwrap()["code"],
+                code
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn rejected_origin_and_unknown_route_keep_safe_metadata() {
         for (uri, origin, status) in [
             ("/stores-api/stores", "https://outside.invalid", 403),
-            ("/outside", "null", 404),
+            ("/stores-api/stores", "null", 403),
+            ("/outside", "https://platform.example.test", 404),
         ] {
             let response = app()
                 .oneshot(

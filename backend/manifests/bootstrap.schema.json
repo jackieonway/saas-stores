@@ -48,10 +48,10 @@
           "const": "HTML"
         },
         "entryUrl": {
-          "const": "/sub-apps/stores/unreleased/index.html"
+          "const": "http://127.0.0.1:3014/index.html"
         },
         "runtimeMode": {
-          "const": "IFRAME"
+          "const": "TRUSTED"
         },
         "autoCreateMenu": {
           "const": false

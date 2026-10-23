@@ -1,4 +1,4 @@
-export type BrowserCapabilityMode = 'client' | 'iframe' | 'host'
+export type BrowserCapabilityMode = 'client'
 export interface BrowserCapabilityResult {
   readonly mode: BrowserCapabilityMode
   readonly supported: boolean

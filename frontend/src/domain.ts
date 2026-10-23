@@ -56,7 +56,7 @@ const includes = (values: string[], id: string) => values.some(value => equal(va
 export function validContext(props: unknown, now = Date.now()): props is Props {
   if (!object(props)) return false
   const signal = props.signal as AbortSignal | undefined
-  return props.contractVersion === '2.0' && (props.sdkVersion === undefined || props.sdkVersion === '1.0.0') &&
+  return props.contractVersion === '2.0' && (props.sdkVersion === undefined || props.sdkVersion === '2.0.0') &&
     props.appCode === APP_CODE && props.basePath === '/micro/stores' &&
     Number.isSafeInteger(props.contextEpoch) && (props.contextEpoch as number) > 0 &&
     typeof props.contextVersion === 'string' && props.contextVersion.length > 0 &&

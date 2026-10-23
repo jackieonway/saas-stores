@@ -4,6 +4,11 @@ import { can, canMemberLookup, canRoute, routeView, identityKey, validContext,
   validUUID, validBusinessDate, validAmount, normalizeAmount, shanghaiToday } from '../src/domain.ts'
 import { context, grantContext, operations, baseRow, id, user, tenant, organization, child, outside, staff } from './domain.fixture.mjs'
 
+test('SDK 2 contexts remain valid and legacy SDK contexts are rejected', () => {
+  assert.equal(validContext(context()), true)
+  assert.equal(validContext({ ...context(), sdkVersion: '1.0.0' }), false)
+})
+
 test('all nine exact operation pairs require their own permission and a unique identity-bound grant', () => {
   for (const operation of operations) {
     const props = grantContext(operation)

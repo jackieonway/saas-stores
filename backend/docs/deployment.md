@@ -1,27 +1,39 @@
-# 门店 Docker / Compose 部署
+# 门店发布与运维
 
-## 1. 构建镜像
+后端和前端分别构建、分别发布。前端是 qiankun HTML / TRUSTED 静态包，后端使用专属 PostgreSQL 数据库。平台、门店 API 和静态服务通过公开 HTTPS 网关组合，机密客户端凭据只注入 API 进程。
 
-在本仓库根执行；来源、版本和路由替换为实际值：
+## 构建镜像
+
+从本仓库根执行，版本与域名替换为实际值：
 
 ```sh
 docker build -t saas-stores-api:local backend
-docker build --build-arg APP_CODE=stores --build-arg APP_VERSION=1.0.0 --build-arg HOST_ORIGIN=https://platform.example.com --build-arg API_BASE=/stores-api -t saas-stores-web:local frontend
+docker build --build-arg APP_CODE=stores --build-arg APP_VERSION=2.0.0-local --build-arg HOST_ORIGIN=https://platform.example.com --build-arg API_BASE=/stores-api -t saas-stores-web:local frontend
 ```
 
-上下文是两个实际工程目录。将审阅镜像发布到自己的 registry，记录不可变摘要，Compose 运行时使用该摘要；当前 CI 只构建，不自动发布或上线。
+`frontend` 镜像构建要求准确的 HTTPS `HOST_ORIGIN`；`API_BASE` 是根路径或 HTTPS 地址。镜像驱动不接受回环 HTTP，HTTP 本机演练使用 [本机网关](../../frontend/deploy/local/README.md)和普通前端构建。前端构建参数全为公开值，修改来源或 API 地址需要重新构建。
 
-## 2. 运行配置
+API 镜像使用 Rust `1.97.0` 编译，运行镜像为 Debian；静态镜像使用 Node `24.22.1`、npm `11.16.0` 构建，最终运行非 root Nginx。正式发布记录源码修订、输入摘要和不可变镜像摘要，再将审阅后的镜像放入自己的 registry。CI 会构建镜像，不会自动发布或激活部署。
 
-将 backend/compose.env.example 复制为源码之外的私有文件，例如 /srv/saas/private/stores.env。填写 POSTGRES_IMAGE、STORES_API_IMAGE、STORES_FRONTEND_IMAGE、STORES_POSTGRES_PASSWORD、STORES_DATABASE_URL、PLATFORM_API_ORIGIN、PLATFORM_CLIENT_ID、PLATFORM_CLIENT_SECRET。
+## Compose 环境与来源覆盖
 
-数据库 URL 使用容器 DNS stores-postgres:5432，数据库名 stores，账号与 Compose 一致；密码做 URL 编码。API 与平台通过真实 HTTPS 交互，不能用容器 localhost 指向主机平台。
+将 `backend/compose.env.example` 复制到仓库外的私有配置，例如 `/srv/saas/private/stores.env`。填写 `POSTGRES_IMAGE`、`STORES_API_IMAGE`、`STORES_FRONTEND_IMAGE`、`STORES_POSTGRES_PASSWORD`、`STORES_DATABASE_URL`、`STORES_ALLOWED_ORIGINS` 和平台三项配置。正式镜像建议用 `registry/name@sha256:...`。
 
-EDGE_NETWORK_NAME 对应预先创建的受控私网，例如 platform-edge。Compose 不自动创建该外部网络，也不启动平台。可选私有指标使用 STORES_METRICS_TOKEN；额外 CA、授权模式或预算参数若未在 Compose 透传，需显式补充服务环境/override，不能仅写宿主变量后推断生效。
+数据库 URL 指向 `stores-postgres:5432/stores`，账号 `stores`，密码按 URI 规则编码。容器内的 `127.0.0.1` 代表自身，不能用它访问宿主平台。`PLATFORM_API_ORIGIN` 必须是 API 可达且证书可信的真实 HTTPS origin。
 
-## 3. 启动与检查
+`compose.yml` 从私有 env 文件读取必填 `STORES_ALLOWED_ORIGINS`。qiankun 从平台页面发出的跨域请求，以及携带 Origin 的同源写入，均需放行实际平台来源。例如：
 
-进入 backend 执行：
+```dotenv
+STORES_ALLOWED_ORIGINS=https://platform.example.com
+```
+
+Compose 与 API 配置都拒绝缺失和空值，API 还拒绝 `null`、通配符、非准确 origin 及生产 HTTP。需要 `combined` 授权、其他超时预算或额外 CA 时，可在私有 override 的 `environment` 中显式透传。额外 CA 文件还需只读挂载到容器内，并将 `PLATFORM_CA_CERT_FILE` 指向容器路径。所有选项见 [后端配置](../README.md)。
+
+`EDGE_NETWORK_NAME` 指定已有的受控 Docker 私网，默认示例名 `platform-edge`。Compose 会创建自己的内部数据库网络，但不会创建外部 edge 网络或启动平台。可选 `STORES_METRICS_TOKEN` 专用于私网采集。
+
+## 启动服务
+
+从 `backend` 执行：
 
 ```sh
 docker compose --env-file /srv/saas/private/stores.env -f compose.yml config --quiet
@@ -30,16 +42,37 @@ docker compose --env-file /srv/saas/private/stores.env -f compose.yml ps
 docker compose --env-file /srv/saas/private/stores.env -f compose.yml logs --tail 100 stores-api
 ```
 
-Compose 管理 stores-postgres、stores-api、stores-web。API 默认仅绑定主机回环 3031，静态前端回环 3014；共享 edge 网络可供平台网关通过容器服务名访问。
+`stores-postgres` 通过健康检查后启动 `stores-api`。服务首次启动应用内嵌迁移，后续启动核验迁移 checksum 与 schema fingerprint。前端默认映射宿主回环 `3014:8080`，API 默认回环 `3031:3031`；`API_PORT`、`FRONTEND_PORT` 可在 env 文件调整。共享 edge 网络允许网关访问容器服务名。
 
-## 4. HTTPS 与应用登记
+API 结构校验失败时停止发布，定位历史或迁移差异；不要删除数据库卷或手改 checksum 解决。静态容器 `/healthz` 只证明静态服务工作；业务 readiness 为 `/stores-api/health/ready`。
 
-在平台网关配置 stores 上游为 stores-api:3031；静态版本路由使用 stores-web:8080，并加入 allowedServices。平台登记入口须匹配真实版本路径与镜像 APP_VERSION；CSP 和来源要允许实际连接。
+## 网关与平台登记
 
-旧版本 URL 不能都指向会被覆盖的新镜像；支持回退时需保留独立旧静态服务或版本存储。配置完成后实际验证 HTTPS、资源 MIME/404、普通用户业务操作、切组织和撤权。
+推荐由平台公开网关提供两条路由：
 
-## 5. 升级与恢复
+| 公开路径 | 上游与要求 |
+| --- | --- |
+| `/stores-api`、`/stores-api/...` | `stores-api:3031`，保留业务前缀及合法 Origin / OPTIONS |
+| `/sub-apps/stores/versions/<version>/...` | 对应不可变静态版本，路由到静态容器时去掉版本前缀 |
 
-升级前备份并记录当前镜像、配置、迁移历史及在途未知写。后端不得重写已执行 SQL/checksum；旧镜像必须兼容当前数据库。前端回退与数据库恢复分别处理，不删除业务数据卷作为升级步骤。
+若网关配置有服务白名单，显式加入实际的 `stores-api`、`stores-web` 服务。静态文件通过相对地址加载，正确返回 HTML / JavaScript / CSS MIME，开放宿主读取 CORS。HTML 使用重新校验，版本资源可长期缓存，缺失资源返回 `404`，不能回退到平台 SPA HTML。
 
-恢复到隔离新库后再做业务验收。三库协调恢复工具由平台 ops 维护，其固定材料格式需要单独对齐，不因使用 Docker 自动可用。接口并发和未知结果规则见 [API](../API.md)。
+宿主需要启用 qiankun 的可信 HTML 加载策略，并使其 CSP 允许实际静态与 API 来源；使用宿主策略生成器时核对 `trustedHtmlEval` 与应用来源白名单。子应用响应头不能替宿主页面放开执行策略。业务私有 `/stores-api/internal`、`/stores-api/internal/...` 及指标兼容路径应在公开网关返回 `404`。
+
+平台应用 code 固定 `stores`、基址 `/micro/stores`，登记 `entryType=HTML`、`runtimeMode=TRUSTED`，入口指向真实新版本的 `index.html`。登记模板在 [bootstrap.manifest.json](../manifests/bootstrap.manifest.json)。修改文件不会自动迁移平台数据库中的旧应用、版本或激活记录，必须逐项核对。
+
+外部静态域名也可承载完整 `dist`。这时需要静态 CORS、宿主 CSP 及明确的 API 网关，API 白名单仍使用平台页面 origin。
+
+## 版本切换与验收
+
+从前端目录运行 `npm run verify:release -- dist --version <实际版本>`。校验器检查 `build-info.json` 的 `application=stores`、`runtime=qiankun`、`sdkVersion=2.0.0`、契约 `2.0` 和实际版本，再核对 HTML、清单、CSS、许可证及 UMD 的四个生命周期导出。HTML 属性与实体通过 parse5 解析；`bootstrap.sdkContract` 必须冻结、只读，并执行 SDK 2 接受、SDK 1 / 未知版本拒绝的协商检查。旧 iframe / module 入口、metadata SDK2 配旧 SDK 或没有 SDK 的生命周期空壳不能通过。该检查不替代签名或来源信任。CI 在构建后运行相同校验并保存完整 `stores-qiankun-static` 产物。
+
+仓库 `artifacts/micro-apps/stores/versions/1.0.0` 与 `1.0.1` 是历史 iframe 发布，不能用于验收当前 qiankun。生成新版本目录或新镜像，登记新入口并切换激活版本；不可覆盖已使用的同版本字节。单个静态容器只承载一个 dist，不能让所有历史 URL 都指向不断替换的新镜像。
+
+上线前验证公开 HTTPS、证书、静态 MIME / CORS / 缓存 / 404、业务健康、无认证拒绝、普通用户合法与越权操作，再通过浏览器检查 qiankun 挂载、组织切换、撤权、深路由和卸载后重入。数据写入按 [API 恢复规则](../API.md)处理未知结果。
+
+## 升级与恢复
+
+升级前备份业务数据库并记录平台登记、应用版本、镜像摘要、私有配置版本和未确认写入。前端回退需要保留旧版本服务或独立版本存储，后端回退须确认旧程序兼容已经执行的数据库迁移。
+
+数据库恢复先进入隔离新库校验迁移与业务数据，再切换连接。平台身份库和门店业务库分别恢复，恢复时间点和跨库成员状态需要重新核对。本仓库没有自动完成平台及多个业务库协调恢复的命令。

@@ -16,3 +16,14 @@ test('Docker source COPY inputs exist inside the independent repository', () => 
     }
   }
 })
+
+test('Compose and runtime templates require an explicit qiankun host origin', () => {
+  const compose = readFileSync(new URL('backend/compose.yml', root), 'utf8')
+  assert.match(compose, /STORES_ALLOWED_ORIGINS:\s*\$\{STORES_ALLOWED_ORIGINS:\?[^}]+\}/)
+  assert.doesNotMatch(compose, /STORES_ALLOWED_ORIGINS:\s*['"]?null/)
+  for (const template of ['backend/config.example', 'backend/compose.env.example']) {
+    const config = readFileSync(new URL(template, root), 'utf8')
+    assert.match(config, /^STORES_ALLOWED_ORIGINS=\s*$/m)
+    assert.doesNotMatch(config, /^STORES_ALLOWED_ORIGINS=(?:null|\*)\s*$/m)
+  }
+})

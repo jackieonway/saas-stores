@@ -18,7 +18,13 @@ jobs:
       - run: node --test ../.github/tests/repository-structure.mjs
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm run build -- --allowed-host-origin https://platform.example.com
+      - run: npm run verify:release -- dist --version 1.0.1
       - run: npm test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stores-qiankun-static
+          path: frontend/dist/
+          if-no-files-found: error
   backend:
     runs-on: ubuntu-24.04
     defaults:
@@ -31,6 +37,46 @@ jobs:
       - run: cargo check --locked --all-targets
       - run: cargo test --locked --lib
       - run: cargo clippy --locked --all-targets -- -D warnings
+
+  backend-http-fixture:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: frontend/.nvmrc
+      - run: rustup toolchain install 1.97.0 --profile minimal
+      - run: cargo test --locked --lib
+        env:
+          STORES_TEST_NODE: node
+
+  backend-postgres-contracts:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: ci_stores
+          POSTGRES_PASSWORD: ci_owned_only
+          POSTGRES_DB: postgres
+        ports: ['55432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ci_stores -d postgres"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.97.0 --profile minimal
+      - run: cargo test --locked --test postgres_contracts -- --include-ignored --nocapture
+        env:
+          TEST_DATABASE_URL: postgresql://ci_stores:ci_owned_only@127.0.0.1:55432/postgres
+          CI_TEST_POSTGRES_OWNER: ci-stores-contract
+          STORES_TEST_LOCAL_POSTGRES_OWNER: ci-stores-contract@127.0.0.1:55432
 
   images:
     runs-on: ubuntu-24.04

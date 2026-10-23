@@ -1,0 +1,176 @@
+{
+  "application": "stores",
+  "runtime": "qiankun",
+  "outputOwner": "stores-frontend-v1",
+  "version": "2.0.3-qiankun",
+  "contractVersion": "2.0",
+  "sdkVersion": "2.0.0",
+  "reactVersion": "19.3.0",
+  "reactDomVersion": "19.3.0",
+  "typescriptVersion": "5.9.3",
+  "viteVersion": "8.3.4",
+  "nodeVersion": "24.22.1",
+  "sourceSha256": "f6b628b7fa9e7ff2bfe90dd9048cb3eb958ec9b68cb3efa8b77c9be3b9d664e0",
+  "inputCount": 31,
+  "packageLockSha256": "6d3c90074d81d925ad157cdfe80bb6dd05eb2bff861539cabb25e829a0193735",
+  "inputs": [
+    {
+      "path": ".npmrc",
+      "bytes": 19,
+      "sha256": "7151cf397def0c2cb0ab65643701d27d335a72c90f775675b5f826bc7005818a"
+    },
+    {
+      "path": "index.html",
+      "bytes": 241,
+      "sha256": "05e1180fbd91b04552f3ed8a311c0fbd3ede3f80bc371f5309525c1564e8c435"
+    },
+    {
+      "path": "package-lock.json",
+      "bytes": 29134,
+      "sha256": "6d3c90074d81d925ad157cdfe80bb6dd05eb2bff861539cabb25e829a0193735"
+    },
+    {
+      "path": "package.json",
+      "bytes": 852,
+      "sha256": "520564ce5fda3e1a1df2e2b4176e6be33996266913c7f7976e891c631b6ccfce"
+    },
+    {
+      "path": "scripts/build.mjs",
+      "bytes": 3127,
+      "sha256": "27a57fa2f4388495525f99284b3468aeafa6419431c74f384644ec06aa40c97f"
+    },
+    {
+      "path": "scripts/dev.mjs",
+      "bytes": 1150,
+      "sha256": "633970ede33081e2fb061b94751e24b640967f646b2bd076ceb6980f44d5f935"
+    },
+    {
+      "path": "scripts/test.mjs",
+      "bytes": 678,
+      "sha256": "28cdbd34c0138da2f8b791a4e25ef2cb7403b4533d200b131b3cfc662b4b9738"
+    },
+    {
+      "path": "src/app.tsx",
+      "bytes": 28303,
+      "sha256": "2c9b8e65d1ae24cb64b76679d35d848e049692c51c410272d3ed089003dd37e4"
+    },
+    {
+      "path": "src/client.ts",
+      "bytes": 32229,
+      "sha256": "c5868e8ecfe9f855cfd2438f1f3d512cb58f1303d5196ac6e179f1b670a913c4"
+    },
+    {
+      "path": "src/controller.ts",
+      "bytes": 29511,
+      "sha256": "6ac374f03a693f6654642b3bf5975aa8991a4a820b9ace9009da7c163f576c6d"
+    },
+    {
+      "path": "src/domain.ts",
+      "bytes": 10613,
+      "sha256": "057b60134832a740ded735ee11473635619e5336b7e1cc32ab2a828b2de89409"
+    },
+    {
+      "path": "src/qiankun-entry.ts",
+      "bytes": 955,
+      "sha256": "3cbab0afade95d33cc21c16a5e48a2348c9243e62b0fad86ee6ad0bf01061d38"
+    },
+    {
+      "path": "src/qiankun-lifecycle.ts",
+      "bytes": 2158,
+      "sha256": "5d05cab6968605a59476e3fd156f948fde707f7718d11fdcd51806a7c414d08c"
+    },
+    {
+      "path": "src/sdk.ts",
+      "bytes": 348,
+      "sha256": "200cdc9b2f5c4aabeb358dc300970b80cf38953ea2e97a78623085b03b852a0b"
+    },
+    {
+      "path": "src/styles.css",
+      "bytes": 20436,
+      "sha256": "8a74481d1244d72105f3cdc8b6bc402922346525bb2281e3df63670762b37f9a"
+    },
+    {
+      "path": "tsconfig.json",
+      "bytes": 490,
+      "sha256": "4271a4d843e6a2ed3ce366f1d2b85efdf0768eec61d3b4d652753c18558ced59"
+    },
+    {
+      "path": "vendor/micro-sdk/SOURCE.json",
+      "bytes": 2189,
+      "sha256": "5108c57c02c8bc57d4444af812fd3a2e8f38e390daafb64aac75c6d2e4474033"
+    },
+    {
+      "path": "vendor/micro-sdk/artifact-manifest.json",
+      "bytes": 1916,
+      "sha256": "2e6007209f63dba709157eb6cd37ef7c4961c679e10b2dbbfad6690836143c3c"
+    },
+    {
+      "path": "vendor/micro-sdk/capabilities.d.mts",
+      "bytes": 437,
+      "sha256": "4d68d6b325cca39df0312eae9eb6efb7affa55763efe0bbb52f6c30aaeccd6af"
+    },
+    {
+      "path": "vendor/micro-sdk/http.d.mts",
+      "bytes": 1119,
+      "sha256": "82c41e76d47c873dd1209b831d482b8521ace0586167083b5e7eef0b96b36c3f"
+    },
+    {
+      "path": "vendor/micro-sdk/index.d.mts",
+      "bytes": 1541,
+      "sha256": "9562bfba60aef34811e2c98e59bfef715ef29966d8a4c9493deac77bf351fe10"
+    },
+    {
+      "path": "vendor/micro-sdk/index.d.ts",
+      "bytes": 1541,
+      "sha256": "9562bfba60aef34811e2c98e59bfef715ef29966d8a4c9493deac77bf351fe10"
+    },
+    {
+      "path": "vendor/micro-sdk/index.mjs",
+      "bytes": 16207,
+      "sha256": "fc8080c2e6d01c262788a3f48232cb2659a558f635ebef7d8991ae8738f443ce"
+    },
+    {
+      "path": "vendor/micro-sdk/package.json",
+      "bytes": 309,
+      "sha256": "038f282ef3696abce27e1e61a3f7e7745a378dca9d79123cff8d114ae22b5f63"
+    },
+    {
+      "path": "vendor/micro-sdk/protocol.d.mts",
+      "bytes": 679,
+      "sha256": "dcbebdd3d10afc24e534fe10f7905c0eb684f31673c08980cc5146b5f01b0b63"
+    },
+    {
+      "path": "vendor/micro-sdk/protocol.mjs",
+      "bytes": 779,
+      "sha256": "68e7f2f185315766dceb2a8c9113fc37aab1b720e11395f05b4d7202652a3fde"
+    },
+    {
+      "path": "vendor/micro-sdk/protocol.rs",
+      "bytes": 24030,
+      "sha256": "6613cf9825e27b89ccd5fc095bee3f974c34f78103df0d43cebf7b51944c42ca"
+    },
+    {
+      "path": "vendor/micro-sdk/schema.json",
+      "bytes": 20299,
+      "sha256": "7205dc0edccb87e69c13e0d0160bdf4f6ff662c7eb7487873139d0b5f5c9f4ce"
+    },
+    {
+      "path": "vendor/micro-sdk/sdk.js",
+      "bytes": 18057,
+      "sha256": "3c1545da8ac535dd3a7a2fd619bcd2994977b8711a06a625fa661dda13ebb4df"
+    },
+    {
+      "path": "vendor/micro-sdk/types.d.ts",
+      "bytes": 5400,
+      "sha256": "be11099106fcb960cfbbe29c462a600ff4e066225d9e49318607858f1875ea5b"
+    },
+    {
+      "path": "vite.config.mjs",
+      "bytes": 6388,
+      "sha256": "939e0fcbdc06faaf13bdda7dcbafc6f075fe7ba6660aaa52294e34ef71724c13"
+    }
+  ],
+  "entry": "assets/micro-app.umd.js",
+  "dynamicChunks": [],
+  "buildManifest": "asset-manifest.json"
+}

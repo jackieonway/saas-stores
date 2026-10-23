@@ -15,6 +15,7 @@ for (let index = 0; index < args.length; index += 2) {
   else options[name.slice(2)] = value
 }
 const publicConfig = readPublicConfig(options)
+const outputName = 'dist'
 
 // Inspect every existing path component before any recursive deletion. In
 // particular, a junction under temp must not redirect cleanup outside temp.
@@ -32,8 +33,8 @@ function canonicalDestination(input) {
   }
   return path.join(realpathSync(current), ...suffix)
 }
-const destination = canonicalDestination(options['out-dir'] || path.join(appRoot, 'dist'))
-const defaultDestination = path.join(realpathSync(appRoot), 'dist')
+const destination = canonicalDestination(options['out-dir'] || path.join(appRoot, outputName))
+const defaultDestination = path.join(realpathSync(appRoot), outputName)
 const temporary = realpathSync(os.tmpdir()), relative = path.relative(temporary, destination)
 if (destination !== defaultDestination && (!relative || path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep))) {
   throw new Error('自定义输出须位于系统临时目录内；发布请打包生成的 dist')
