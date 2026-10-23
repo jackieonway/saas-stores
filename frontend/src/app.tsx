@@ -2,24 +2,24 @@ import React, { useState, useSyncExternalStore } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { StoresController, type Form, type FormKind } from './controller.ts'
 import { canRoute, canMemberLookup } from './domain.ts'
-import type { Operation, Store, DailyReport, MemberPurpose } from './domain.ts'
+import type { Operation, Store, StoreOrganization, DailyReport, MemberPurpose } from './domain.ts'
 import type { RenderLifecycle } from './qiankun-lifecycle.ts'
 import './styles.css'
 
 const base = '/micro/stores'
 const navigation = [
-  ['', '门店台账', '01'], ['/store-create', '新建门店', '+'], ['/staff', '员工查询', '02'],
-  ['/staff-assign', '关联员工', '+'], ['/reports', '营业日报', '03'], ['/daily-report-create', '录入日报', '+'],
+  ['', '门店台账', '01'], ['/store-create', '完善营业资料', '+'], ['/staff', '平台成员', '02'],
+  ['/reports', '营业日报', '03'], ['/daily-report-create', '录入日报', '+'],
 ] as const
 const operation = (resource: Operation['resource'], action: Operation['action']) => ({ resource, action }) as Operation
 const storeRead = operation('store', 'read'), reportRead = operation('store-daily-report', 'read')
 const statuses = { OPEN: '营业中', CLOSED: '已停业' }
 const titles: Record<string, [string, string]> = {
   stores: ['门店台账', '查阅门店资料，维护每一处营业现场。'],
-  'store-create': ['新建门店', '一店一组织。负责人从当前授权的成员目录中选择。'],
-  'store-detail': ['门店资料', '维护营业状态、业务联系信息与负责人。'],
-  staff: ['员工查询', '按门店查询当前有效的员工关联。'],
-  'staff-assign': ['关联员工', '选择门店与有效成员，建立新的员工关联。'],
+  'store-create': ['完善营业资料', '先选择平台门店组织，再登记营业状态与业务联系方式。'],
+  'store-detail': ['门店资料', '组织资料由平台统一维护，营业信息在此更新。'],
+  staff: ['平台成员', '查看门店组织当前有效的成员；成员关系由平台统一维护。'],
+  'platform-membership': ['成员管理已迁移', '门店员工使用平台组织成员关系。'],
   reports: ['营业日报', '按营业日查阅记录，由服务端精确汇总。'],
   'report-create': ['录入日报', '请核对门店、营业日期与金额后提交。'],
   'report-detail': ['日报详情', '营业日期与门店固定；修改金额或备注时校验版本。'],
@@ -57,17 +57,17 @@ function Recovery({ form, controller }: { form: Form; controller: StoresControll
   return <>
     {sent?.inFlight && <Notice>原写入请求仍在进行中。请等待结果；当前不能读回确认或再次提交。</Notice>}
     {form.error && <Notice tone="error">{form.error}</Notice>}
-    {form.conflict && !sent && <Notice tone="error">{form.kind.endsWith('-edit') || form.kind === 'staff-unassign' ? '版本已变化。原输入保留，请读取最新版本、核对后使用该版本。' : '已有相同门店、员工关联或营业日期的记录。请到对应查询页核对，勿重复提交。'}</Notice>}
-    {(form.awaitingRead || form.conflict) && (form.kind.endsWith('-edit') || form.kind === 'staff-unassign') && !sent && <div className="actions recovery-actions"><button type="button" className="secondary" onClick={() => void controller.readLatest(form.id)}>读取最新版本</button></div>}
-    {form.latest && !sent && <div className="recovery-panel"><h3>服务端最新版本 <span className="numeric">v{form.latest.version}</span></h3><p>原输入仍在表单中。请核对服务端当前值，再决定是否继续保存。</p><dl className="compare-values">{'name' in form.latest ? <><dt>门店名称</dt><dd>{form.latest.name}</dd><dt>营业状态</dt><dd>{statuses[form.latest.businessStatus]}</dd><dt>业务联系信息</dt><dd>{form.latest.businessContact || '—'}</dd><dt>负责人</dt><dd>{form.latest.managerDisplayName || '未设置'}</dd></> : 'amount' in form.latest ? <><dt>营业金额</dt><dd className="money">{form.latest.amount}</dd><dt>备注</dt><dd>{form.latest.note || '—'}</dd></> : <><dt>员工</dt><dd>{form.latest.displayName}</dd></>}</dl><button type="button" className="secondary" onClick={() => controller.useLatest(form.id)}>使用最新版本</button></div>}
-    {sent?.outcome === 'unknown' && !sent.inFlight && <div className="recovery-panel" data-testid="unknown-write"><h3>写入结果未知</h3><p>已保留原组织、目标与发送内容。请保持当前页面开启；刷新、关闭或卸载页面可能丢失本地核对信息。</p><dl className="compare-values"><dt>原门店</dt><dd className="uuid">{sent.fields.storeId || sent.target?.id || '当前组织门店'}</dd>{sent.fields.businessDate && <><dt>原营业日期</dt><dd>{sent.fields.businessDate}</dd></>}{sent.fields.userId && <><dt>原员工 ID</dt><dd className="uuid">{sent.fields.userId}</dd></>}{sent.fields.amount && <><dt>原营业金额</dt><dd className="money">{sent.fields.amount}</dd></>}{sent.version && <><dt>发送时版本</dt><dd>v{sent.version}</dd></>}</dl>
+    {form.conflict && !sent && <Notice tone="error">{form.kind.endsWith('-edit') ? '版本已变化。原输入保留，请读取最新版本、核对后使用该版本。' : '此平台门店已有营业资料，或已有当日营业记录。请先查询核对，勿重复提交。'}</Notice>}
+    {(form.awaitingRead || form.conflict) && form.kind.endsWith('-edit') && !sent && <div className="actions recovery-actions"><button type="button" className="secondary" onClick={() => void controller.readLatest(form.id)}>读取最新版本</button></div>}
+    {form.latest && !sent && <div className="recovery-panel"><h3>服务端最新版本 <span className="numeric">v{form.latest.version}</span></h3><p>原输入仍在表单中。请核对服务端当前值，再决定是否继续保存。</p><dl className="compare-values">{'name' in form.latest ? <><dt>门店名称</dt><dd>{form.latest.name}</dd><dt>营业状态</dt><dd>{statuses[form.latest.businessStatus]}</dd><dt>业务联系信息</dt><dd>{form.latest.businessContact || '—'}</dd><dt>营业联系人</dt><dd>{form.latest.managerDisplayName || '未设置'}</dd></> : <><dt>营业金额</dt><dd className="money">{form.latest.amount}</dd><dt>备注</dt><dd>{form.latest.note || '—'}</dd></>}</dl><button type="button" className="secondary" onClick={() => controller.useLatest(form.id)}>使用最新版本</button></div>}
+    {sent?.outcome === 'unknown' && !sent.inFlight && <div className="recovery-panel" data-testid="unknown-write"><h3>写入结果未知</h3><p>已保留原组织、目标与发送内容。请保持当前页面开启；刷新、关闭或卸载页面可能丢失本地核对信息。</p><dl className="compare-values"><dt>原门店</dt><dd className="uuid">{sent.fields.organizationId || sent.fields.storeId || sent.target?.id || '—'}</dd>{sent.fields.businessDate && <><dt>原营业日期</dt><dd>{sent.fields.businessDate}</dd></>}{sent.fields.userId && <><dt>原员工 ID</dt><dd className="uuid">{sent.fields.userId}</dd></>}{sent.fields.amount && <><dt>原营业金额</dt><dd className="money">{sent.fields.amount}</dd></>}{sent.version && <><dt>发送时版本</dt><dd>v{sent.version}</dd></>}</dl>
       {controller.readbackPermission(form) ? <button type="button" className="secondary" onClick={() => void controller.readback(form.id)}>读回核对</button> : <Notice>当前没有对应读取权限，无法核对本次写入。原输入已保留；请取得读取授权后核对，勿直接重复提交。</Notice>}
-      {form.readback && <><h4>本次读回的服务端记录</h4>{form.readback.length ? <div className="readback-records">{form.readback.map(row => <dl key={row.id}><dt className="uuid">{row.id} · v{row.version}</dt><dd>{'name' in row ? `${row.name} / ${statuses[row.businessStatus]} / ${row.businessContact} / ${row.managerDisplayName || '无负责人'}` : 'amount' in row ? `${row.businessDate} / ${row.amount} / ${row.note}` : `${row.displayName} / ${row.userId}`}</dd><dd className="uuid">组织 {row.organizationId} · 录入人 {row.ownerUserId}</dd></dl>)}</div> : <p>当前授权范围内未查到对应记录。请结合原目标与服务端状态判断。</p>}<button type="button" className="secondary" onClick={() => controller.acknowledgeReadback(form.id)}>已核对，允许新操作</button></>}
+      {form.readback && <><h4>本次读回的服务端记录</h4>{form.readback.length ? <div className="readback-records">{form.readback.map(row => <dl key={row.id}><dt className="uuid">{row.id} · v{row.version}</dt><dd>{'name' in row ? `${row.name} / ${statuses[row.businessStatus]} / ${row.businessContact} / ${row.managerDisplayName || '无营业联系人'}` : `${row.businessDate} / ${row.amount} / ${row.note}`}</dd><dd className="uuid">组织 {row.organizationId} · 录入人 {row.ownerUserId}</dd></dl>)}</div> : <p>当前授权范围内未查到对应记录。请结合原目标与服务端状态判断。</p>}<button type="button" className="secondary" onClick={() => controller.acknowledgeReadback(form.id)}>已核对，允许新操作</button></>}
     </div>}
   </>
 }
 function Submit({ form, controller, children }: { form: Form; controller: StoresController; children: React.ReactNode }) {
-  return <div className="actions"><button type="submit" className="primary" disabled={form.pending || !!form.sent || form.awaitingRead}>{form.pending ? '正在提交…' : children}</button>{form.version && <span className="version">当前提交基于 v{form.version}</span>}</div>
+  return <div className="actions"><button type="submit" className="primary" disabled={form.pending || !!form.sent || form.awaitingRead || form.kind === 'store-create' && !!form.completedId}>{form.pending ? '正在提交…' : form.kind === 'store-create' && form.completedId ? '已登记营业资料' : children}</button>{form.version && <span className="version">当前提交基于 v{form.version}</span>}</div>
 }
 function BusinessForm({ form, controller, children, className = '' }: { form: Form; controller: StoresController; children: React.ReactNode; className?: string }) {
   return <form className={`business-form ${className}`} data-form-kind={form.kind} data-form-id={form.id} onSubmit={event => { event.preventDefault(); void controller.submit(form.id) }}>{children}<Recovery form={form} controller={controller} /></form>
@@ -75,11 +75,11 @@ function BusinessForm({ form, controller, children, className = '' }: { form: Fo
 function MemberPicker({ form, controller }: { form: Form; controller: StoresController }) {
   const state = controller.state, props = state.props
   const [query, setQuery] = useState('')
-  const purpose = operation(form.kind === 'staff-assign' ? 'store-staff' : 'store', form.kind === 'store-create' ? 'create' : form.kind === 'staff-assign' ? 'assign' : 'update') as MemberPurpose
-  const organizationId = form.target?.organizationId ?? props?.organization.id
+  const purpose = operation('store', form.kind === 'store-create' ? 'create' : 'update') as MemberPurpose
+  const organizationId = form.kind === 'store-create' ? form.fields.organizationId : form.target?.organizationId
   if (!props || !organizationId || !canMemberLookup(props, purpose, organizationId)) return null
   const directory = state.directoryFormId === form.id ? state.directory : null
-  return <section className="directory" aria-label="受控成员目录"><div className="section-heading"><h3>{form.kind === 'staff-assign' ? '选择关联员工' : '选择门店负责人'}</h3><span>受控成员目录</span></div><div className="inline-search"><label htmlFor={`${form.id}-member-search`}>成员搜索<input id={`${form.id}-member-search`} value={query} disabled={form.pending || !!form.sent} onChange={event => setQuery(event.target.value)} placeholder="按显示名称搜索" /></label><button type="button" className="secondary" disabled={form.pending || !!form.sent} onClick={() => void controller.searchMembers(form.id, query)}>搜索成员</button></div>
+  return <section className="directory" aria-label="营业联系人目录"><div className="section-heading"><h3>选择营业联系人</h3><span>所选门店的平台成员</span></div><div className="inline-search"><label htmlFor={`${form.id}-member-search`}>成员搜索<input id={`${form.id}-member-search`} value={query} disabled={form.pending || !!form.sent} onChange={event => setQuery(event.target.value)} placeholder="按显示名称搜索" /></label><button type="button" className="secondary" disabled={form.pending || !!form.sent} onClick={() => void controller.searchMembers(form.id, query)}>搜索成员</button></div>
     {state.loading.has('directory') && state.directoryFormId === form.id && <Loading />}
     {directory && (directory.records.length ? <><ul className="member-list">{directory.records.map(member => <li key={member.id}><div><strong>{member.displayName}</strong><small className="uuid">{member.id}</small></div><button type="button" className="quiet" disabled={form.pending || !!form.sent} onClick={() => controller.selectMember(form.id, member.id)}>选择 {member.displayName}</button></li>)}</ul><Pager {...directory} previous={() => void controller.searchMembers(form.id, state.directoryQuery, directory.page - 1)} next={() => void controller.searchMembers(form.id, state.directoryQuery, directory.page + 1)} /></> : <Empty>当前用途与组织内没有符合条件的有效成员。</Empty>)}
   </section>
@@ -91,7 +91,21 @@ function StoreTarget({ form, controller, optional = false }: { form: Form; contr
   </>
 }
 function StoreFields({ form, controller }: { form: Form; controller: StoresController }) {
-  return <><div className="form-grid"><Field form={form} controller={controller} name="name" label="门店名称" /><Field form={form} controller={controller} name="businessStatus" label="营业状态"><option value="OPEN">营业中</option><option value="CLOSED">已停业</option></Field><Field form={form} controller={controller} name="businessContact" label="业务联系信息" hint="选填，最多 200 个字符。" /><Field form={form} controller={controller} name="managerUserId" label="负责人用户ID" hint="从下方目录选择或输入有效 UUID；留空表示无负责人。" /></div><MemberPicker key={form.id} form={form} controller={controller} /></>
+  return <><div className="form-grid"><Field form={form} controller={controller} name="businessStatus" label="营业状态"><option value="OPEN">营业中</option><option value="CLOSED">已停业</option></Field><Field form={form} controller={controller} name="businessContact" label="业务联系信息" hint="选填，最多 200 个字符。" /><Field form={form} controller={controller} name="managerUserId" label="营业联系人用户ID" hint="从下方门店成员中选择或输入有效 UUID；留空表示未设置。此项不改变平台组织负责人或成员关系。" /></div><MemberPicker key={`${form.id}-${form.fields.organizationId || form.target?.organizationId}`} form={form} controller={controller} /></>
+}
+function PlatformManagement({ controller }: { controller: StoresController }) {
+  return <div className="platform-management"><p>门店名称、编码、地址、组织层级和成员由平台组织管理统一维护。此处补充营业资料，营业联系人仅用于业务联络。</p><button type="button" className="text-button" onClick={() => controller.openPlatformOrganizations()}>前往平台组织管理 ↗</button></div>
+}
+function OrganizationProjection({ organization }: { organization: StoreOrganization }) {
+  const location = [organization.province, organization.city, organization.district, organization.township, organization.village, organization.address].filter(Boolean).join(' / ')
+  return <section className="organization-projection" aria-label="平台门店组织资料"><div className="section-heading"><h2>{organization.name}</h2><span>平台门店 · 只读</span></div><dl className="compare-values"><dt>组织编码</dt><dd>{organization.code || '—'}</dd><dt>组织路径</dt><dd>{organization.path}</dd><dt>地址</dt><dd>{location || '平台尚未填写'}</dd><dt>平台联系人</dt><dd>{[organization.contactName, organization.contactPhone, organization.contactEmail].filter(Boolean).join(' · ') || '平台尚未填写'}</dd><dt>组织 ID</dt><dd className="uuid">{organization.id}</dd></dl></section>
+}
+function OrganizationPicker({ form, controller }: { form: Form; controller: StoresController }) {
+  const [query, setQuery] = useState(''), state = controller.state, result = state.organizations
+  const locked = form.pending || !!form.sent
+  return <section className="organization-picker" aria-label="选择平台门店"><div className="section-heading"><h2><span className="step-number">01</span>选择平台门店</h2><span>包含尚未完善营业资料的门店</span></div><div className="inline-search"><label htmlFor={`${form.id}-organization-search`}>门店名称或编码<input id={`${form.id}-organization-search`} value={query} disabled={locked} onChange={event => setQuery(event.target.value)} placeholder="从当前授权范围内查找" /></label><button type="button" className="secondary" disabled={locked || state.loading.has('organizations')} onClick={() => void controller.loadOrganizations(form.id, query)}>查询平台门店</button></div>
+    {state.loading.has('organizations') ? <Loading /> : result && <>{result.records.length ? <ul className="organization-list">{result.records.map(organization => <li key={organization.id} className={state.selectedOrganization?.id === organization.id ? 'is-selected' : ''}><div><strong>{organization.name}</strong><small>{organization.code || '未设置编码'} · {organization.path}</small></div><button type="button" className="quiet" disabled={locked} aria-pressed={state.selectedOrganization?.id === organization.id} onClick={() => controller.selectOrganization(form.id, organization.id)}>{state.selectedOrganization?.id === organization.id ? '已选择' : '选择门店'}</button></li>)}</ul> : <Empty>当前授权范围内没有平台门店。请先在平台组织管理创建“门店”类型的组织，或核对组织访问授权。</Empty>}<Pager {...result} busy={locked} previous={() => void controller.loadOrganizations(form.id, state.organizationQuery, result.page - 1)} next={() => void controller.loadOrganizations(form.id, state.organizationQuery, result.page + 1)} /></>}
+  </section>
 }
 function MoneyFields({ form, controller }: { form: Form; controller: StoresController }) {
   return <><Field form={form} controller={controller} name="amount" label="营业金额" hint="元。非负十进制文本，最多 16 位整数、2 位小数。" /><Field form={form} controller={controller} name="note" label="备注" multiline hint="选填，最多 8192 个字符。" /></>
@@ -103,7 +117,7 @@ function StoresPage({ controller }: { controller: StoresController }) {
   const state = controller.state, form = controller.form('store-query')!, result = state.stores
   if (!controller.allowed(storeRead)) return <Permission />
   return <><BusinessForm form={form} controller={controller} className="filter-form"><div className="filter-fields"><Field form={form} controller={controller} name="q" label="搜索门店" hint="按名称或业务联系信息检索。" /><Field form={form} controller={controller} name="businessStatus" label="营业状态"><option value="">全部状态</option><option value="OPEN">营业中</option><option value="CLOSED">已停业</option></Field><button className="secondary" type="submit">查询门店</button></div></BusinessForm>
-    {state.loading.has('stores') ? <Loading /> : result && (result.records.length ? <><div className="table-wrap"><table><thead><tr><th>门店</th><th>营业状态</th><th>负责人</th><th>业务联系信息</th><th className="align-right">操作</th></tr></thead><tbody>{result.records.map(store => <tr key={store.id} data-row-id={store.id}><td><strong>{store.name}</strong><small className="uuid">{store.id}</small></td><td><span className={`status status-${store.businessStatus}`}>{statuses[store.businessStatus]}</span></td><td>{store.managerDisplayName || '未设置'}</td><td>{store.businessContact || '—'}</td><td className="align-right"><button type="button" className="text-button" disabled={!state.props || !canRoute(state.props, `${base}/stores/${store.id}`)} onClick={() => controller.navigate(`${base}/stores/${store.id}`)}>查看资料 ↗</button></td></tr>)}</tbody></table></div><Pager {...result} previous={() => void controller.paginate(form.id, -1)} next={() => void controller.paginate(form.id, 1)} /></> : <Empty>暂无符合条件的门店；可通过“新建门店”登记当前组织门店。</Empty>)}
+    {state.loading.has('stores') ? <Loading /> : result && (result.records.length ? <><div className="table-wrap"><table><thead><tr><th>门店</th><th>营业状态</th><th>营业联系人</th><th>业务联系信息</th><th className="align-right">操作</th></tr></thead><tbody>{result.records.map(store => <tr key={store.id} data-row-id={store.id}><td><strong>{store.name}</strong><small className="uuid">{store.id}</small></td><td><span className={`status status-${store.businessStatus}`}>{statuses[store.businessStatus]}</span></td><td>{store.managerDisplayName || '未设置'}</td><td>{store.businessContact || '—'}</td><td className="align-right"><button type="button" className="text-button" disabled={!state.props || !canRoute(state.props, `${base}/stores/${store.id}`)} onClick={() => controller.navigate(`${base}/stores/${store.id}`)}>查看资料 ↗</button></td></tr>)}</tbody></table></div><Pager {...result} previous={() => void controller.paginate(form.id, -1)} next={() => void controller.paginate(form.id, 1)} /></> : <Empty>暂无符合条件的营业资料。可通过“完善营业资料”选择已有平台门店组织并登记。</Empty>)}
   </>
 }
 function StoreEditor({ controller, create = false }: { controller: StoresController; create?: boolean }) {
@@ -111,19 +125,20 @@ function StoreEditor({ controller, create = false }: { controller: StoresControl
   const writable = controller.allowed(operation('store', create ? 'create' : 'update'), form.target)
   if (!create && state.loading.has('detail')) return <Loading />
   if (!create && !controller.allowed(storeRead)) return <Permission />
-  return <>{!create && detail && <><RowMeta row={detail} /><div className="record-overview"><h2>{detail.name}</h2><span className={`status status-${detail.businessStatus}`}>{statuses[detail.businessStatus]}</span><p>负责人：{detail.managerDisplayName || '未设置'}</p></div></>}
-    {writable ? <BusinessForm form={form} controller={controller}><StoreFields form={form} controller={controller} /><Submit form={form} controller={controller}>{create ? '创建门店' : '保存门店'}</Submit></BusinessForm> : !create && detail ? <dl className="compare-values"><dt>业务联系信息</dt><dd>{detail.businessContact || '—'}</dd><dt>负责人 ID</dt><dd className="uuid">{detail.managerUserId || '—'}</dd></dl> : <Permission>当前授权不允许创建或修改门店。</Permission>}
+  const selected = create ? state.selectedOrganization : detail?.organization
+  return <><PlatformManagement controller={controller} />{create && writable && <OrganizationPicker form={form} controller={controller} />}{!create && detail && <RowMeta row={detail} />}{selected && <OrganizationProjection organization={selected} />}
+    {writable ? <BusinessForm form={form} controller={controller}><div className="section-heading"><h2>{create && <span className="step-number">02</span>}营业资料</h2><span>{create ? '完成平台门店选择后填写' : '保存时校验营业资料版本'}</span></div>{selected ? <>{create && form.completedId && <Notice>此门店的营业资料已登记。请从门店台账进入详情继续编辑，或选择另一家平台门店。</Notice>}<StoreFields form={form} controller={controller} /><Submit form={form} controller={controller}>{create ? '登记营业资料' : '保存营业资料'}</Submit></> : create && form.fields.organizationId ? <><Notice>{state.loading.has('selected-organization') ? '正在重新验证所选平台门店，营业输入已保留。' : '原门店暂不可用，请从当前平台目录重新选择。营业输入已保留。'}</Notice><fieldset disabled className="retained-draft"><StoreFields form={form} controller={controller} /></fieldset></> : <Notice>请先选择平台门店。组织名称、编码和地址会同步显示，无需重复录入。</Notice>}</BusinessForm> : !create && detail ? <dl className="compare-values"><dt>营业状态</dt><dd>{statuses[detail.businessStatus]}</dd><dt>业务联系信息</dt><dd>{detail.businessContact || '—'}</dd><dt>营业联系人</dt><dd>{detail.managerDisplayName || '未设置'}</dd></dl> : <Permission>当前授权不允许登记或修改营业资料。</Permission>}
     {!create && !detail && !state.loading.has('detail') && !writable && <Notice>记录不存在、暂不可读，或已超出当前授权范围。</Notice>}
   </>
 }
-function StaffPage({ controller, assign = false }: { controller: StoresController; assign?: boolean }) {
-  const state = controller.state, form = controller.form(assign ? 'staff-assign' : 'staff-query')!, result = state.staff
-  if (!controller.allowed(operation('store-staff', assign ? 'assign' : 'read'))) return <Permission />
-  return <><BusinessForm form={form} controller={controller}><StoreTarget key={form.id} form={form} controller={controller} />{assign && <><Field form={form} controller={controller} name="userId" label="员工用户ID" hint="选择下方有效成员或输入用户 UUID。" /><MemberPicker key={form.id} form={form} controller={controller} /></>}<Submit form={form} controller={controller}>{assign ? '关联员工' : '查询员工'}</Submit></BusinessForm>
-    {!assign && (state.loading.has('staff') ? <Loading /> : result ? result.records.length ? <><div className="table-wrap"><table><thead><tr><th>员工</th><th>关联 ID</th><th>版本</th><th className="align-right">操作</th></tr></thead><tbody>{result.records.map(link => { const unlink = state.forms.find(candidate => candidate.kind === 'staff-unassign' && candidate.key.endsWith(`|${link.id}`)); return <tr key={link.id} data-row-id={link.id}><td><strong>{link.displayName}</strong><small className="uuid">{link.userId}</small></td><td className="uuid">{link.id}</td><td className="numeric">v{link.version}</td><td className="align-right">{unlink && controller.allowed(operation('store-staff', 'unassign'), link) ? <><button type="button" className="text-button danger" disabled={unlink.pending || !!unlink.sent} onClick={() => void controller.submit(unlink.id)}>{unlink.pending ? '正在解除…' : '解除关联'}</button>{!unlink.sent && <Recovery form={unlink} controller={controller} />}</> : <span className="muted">无解除权限</span>}</td></tr> })}</tbody></table></div><Pager {...result} previous={() => void controller.paginate(form.id, -1)} next={() => void controller.paginate(form.id, 1)} /></> : <Empty>此门店当前授权内没有有效员工关联。</Empty> : <Empty>输入门店 ID，查询有效员工关联。</Empty>)}
-    {!assign && state.forms.filter(candidate => candidate.kind === 'staff-unassign' && candidate.sent).map(candidate => <Recovery key={candidate.id} form={candidate} controller={controller} />)}
+function StaffPage({ controller }: { controller: StoresController }) {
+  const state = controller.state, form = controller.form('staff-query')!, result = state.staff
+  if (!controller.allowed(operation('store-staff', 'read'))) return <Permission />
+  return <><PlatformManagement controller={controller} /><BusinessForm form={form} controller={controller}><StoreTarget key={form.id} form={form} controller={controller} /><Field form={form} controller={controller} name="q" label="搜索平台成员" hint="按显示名称搜索当前门店组织中的有效成员。" /><Submit form={form} controller={controller}>查询平台成员</Submit></BusinessForm>
+    {state.loading.has('staff') ? <Loading /> : result ? result.records.length ? <><div className="table-wrap"><table><thead><tr><th>平台成员</th><th>用户 ID</th><th>门店组织 ID</th></tr></thead><tbody>{result.records.map(member => <tr key={member.id} data-row-id={member.id}><td><strong>{member.displayName}</strong></td><td className="uuid">{member.id}</td><td className="uuid">{member.organizationId}</td></tr>)}</tbody></table></div><Pager {...result} previous={() => void controller.paginate(form.id, -1)} next={() => void controller.paginate(form.id, 1)} /></> : <Empty>此门店当前授权范围内没有有效的平台成员。</Empty> : <Empty>选择门店后，查询平台维护的成员。</Empty>}
   </>
 }
+
 function ReportsPage({ controller }: { controller: StoresController }) {
   const state = controller.state, form = controller.form('report-query')!, summaryForm = controller.form('summary')!, result = state.reports
   if (!controller.allowed(reportRead)) return <Permission />
@@ -145,14 +160,14 @@ function Page({ controller }: { controller: StoresController }) {
     case 'store-create': return <StoreEditor controller={controller} create />
     case 'store-detail': return <StoreEditor controller={controller} />
     case 'staff': return <StaffPage controller={controller} />
-    case 'staff-assign': return <StaffPage controller={controller} assign />
+    case 'platform-membership': return <><Notice>员工关联与解除操作已迁移到平台组织管理。门店应用只读展示当前平台成员。</Notice><PlatformManagement controller={controller} /></>
     case 'reports': return <ReportsPage controller={controller} />
     case 'report-create': return <ReportEditor controller={controller} create />
     case 'report-detail': return <ReportEditor controller={controller} />
     default: return <Empty>请通过已授权菜单进入门店业务。</Empty>
   }
 }
-function App({ controller }: { controller: StoresController }) {
+export function StoresApp({ controller }: { controller: StoresController }) {
   useSyncExternalStore(controller.subscribe, controller.snapshot, controller.snapshot)
   const state = controller.state, props = state.props, title = titles[state.route.kind]
   return <div className="stores-app" data-testid="stores-app" data-theme={props?.theme ?? 'light'}>
@@ -171,7 +186,7 @@ export function createLifecycle(configuration: { apiBase: string }): RenderLifec
       if (root) return
       container.setAttribute('data-stores-root', '')
       controller = new StoresController({ apiBase: configuration.apiBase })
-      controller.setContext(props); root = createRoot(container); root.render(<App controller={controller} />)
+      controller.setContext(props); root = createRoot(container); root.render(<StoresApp controller={controller} />)
     },
     update(props) { controller?.setContext(props) },
     unmount() { controller?.dispose(); controller = null; root?.unmount(); root = null },

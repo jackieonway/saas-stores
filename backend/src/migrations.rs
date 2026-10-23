@@ -61,7 +61,9 @@ pub(crate) async fn verify(pool: &PgPool) -> Result<(), ServiceError> {
             "business migration history mismatch",
         )));
     }
-    let verified: bool = sqlx::query_scalar("SELECT count(*)=1 AND COALESCE(bool_and(fingerprint=public.stores_schema_fingerprint()),false) FROM public._stores_schema_contract WHERE singleton")
+    // V1 remains an immutable historical baseline. V2 records its value during
+    // the verified upgrade and checks the current catalog with the v2 function.
+    let verified: bool = sqlx::query_scalar("SELECT count(*)=1 AND COALESCE(bool_and(v2.fingerprint=public.stores_schema_fingerprint_v2() AND v2.legacy_fingerprint=v1.fingerprint),false) FROM public._stores_schema_contract_v2 AS v2 JOIN public._stores_schema_contract AS v1 ON v2.singleton=v1.singleton WHERE v2.singleton")
         .fetch_one(pool).await.map_err(failed)?;
     if !verified {
         return Err(failed(std::io::Error::other(

@@ -8,23 +8,28 @@ export type DecimalAmount = string
 export type BusinessStatus = 'OPEN' | 'CLOSED'
 export type Operation =
   | { resource: 'store'; action: 'read' | 'create' | 'update' }
-  | { resource: 'store-staff'; action: 'read' | 'assign' | 'unassign' }
+  | { resource: 'store-staff'; action: 'read' }
   | { resource: 'store-daily-report'; action: 'read' | 'create' | 'update' }
-export type MemberPurpose =
-  | { resource: 'store'; action: 'create' | 'update' }
-  | { resource: 'store-staff'; action: 'assign' }
+export type MemberPurpose = { resource: 'store'; action: 'create' | 'update' }
+export interface StoreOrganization {
+  contractVersion: '1.0'; contextVersion: string; expiresAt: string; revision: string
+  id: UUID; tenantId: UUID; parentId: UUID | null; name: string; code: string
+  organizationType: 'STORE'; status: 'ENABLED'; path: string
+  province: string; city: string; district: string
+  township: string; village: string; address: string
+  contactName: string; contactPhone: string; contactEmail: string
+}
 export interface ScopedRow { tenantId: UUID; organizationId: UUID; ownerUserId: UUID }
 export interface VersionedRow extends ScopedRow { id: UUID; version: number; createdAt: string; updatedAt: string }
 export interface Store extends VersionedRow {
   name: string; businessStatus: BusinessStatus; businessContact: string
   managerUserId: UUID | null; managerDisplayName: string | null
-}
-export interface StaffLink extends VersionedRow {
-  storeId: UUID; userId: UUID; displayName: string; createdByUserId: UUID; removedAt: null
+  organization: StoreOrganization
 }
 export interface DailyReport extends VersionedRow { storeId: UUID; businessDate: BusinessDate; amount: DecimalAmount; note: string }
 export interface Member { id: UUID; displayName: string; organizationId: UUID }
 export interface Page<T> { records: T[]; total: number; page: number; size: number }
+export interface OrganizationPage extends Page<StoreOrganization> { contractVersion: '1.0'; contextVersion: string; expiresAt: string }
 export interface Summary { count: number; totalAmount: DecimalAmount; dateFrom: BusinessDate; dateTo: BusinessDate; storeId: UUID | null }
 
 export const validUUID = (value: unknown): value is UUID => typeof value === 'string' &&
@@ -77,7 +82,7 @@ export function identityKey(props: Props): string {
 function realOperation(operation: Operation): boolean {
   return !!operation && (operation.resource === 'store' || operation.resource === 'store-daily-report'
     ? ['read', 'create', 'update'].includes(operation.action)
-    : operation.resource === 'store-staff' && ['read', 'assign', 'unassign'].includes(operation.action))
+    : operation.resource === 'store-staff' && operation.action === 'read')
 }
 function grantFor(props: Props | null, operation: Operation) {
   if (!validContext(props) || !realOperation(operation) || !props.permissions.includes(operation.resource + ':' + operation.action)) return null
@@ -110,8 +115,11 @@ export function can(props: Props | null, operation: Operation, row?: ScopedRow):
   return grant.scope === 'TENANT'
 }
 export function canMemberLookup(props: Props | null, purpose: MemberPurpose, organizationId: UUID): boolean {
-  if (!purpose || !(purpose.resource === 'store' && ['create', 'update'].includes(purpose.action) ||
-      purpose.resource === 'store-staff' && purpose.action === 'assign')) return false
+  if (!purpose || purpose.resource !== 'store' || !['create', 'update'].includes(purpose.action)) return false
+  return canOrganizationLookup(props, purpose, organizationId)
+}
+/** Organization metadata is bounded independently of any local business-row owner. */
+export function canOrganizationLookup(props: Props | null, purpose: Operation, organizationId: UUID): boolean {
   const grant = grantFor(props, purpose)
   if (!grant || !props || !validUUID(organizationId) || !withinCeiling(props, organizationId)) return false
   if (grant.scope === 'SELF' || grant.scope === 'ORG') return equal(organizationId, props.organization.id)
@@ -119,14 +127,15 @@ export function canMemberLookup(props: Props | null, purpose: MemberPurpose, org
 }
 
 export type StoresRoute =
-  | { kind: 'stores' | 'store-create' | 'staff' | 'staff-assign' | 'reports' | 'report-create' | 'not-found' }
+  | { kind: 'stores' | 'store-create' | 'staff' | 'platform-membership' | 'reports' | 'report-create' | 'not-found' }
   | { kind: 'store-detail' | 'report-detail'; id: UUID }
 const routePaths: Record<string, { kind: StoresRoute['kind']; permission: string }> = {
   '/micro/stores': { kind: 'stores', permission: '' },
   '/micro/stores/store-create': { kind: 'store-create', permission: 'store:create' },
   '/micro/stores/stores/:id': { kind: 'store-detail', permission: 'store:read' },
   '/micro/stores/staff': { kind: 'staff', permission: 'store-staff:read' },
-  '/micro/stores/staff-assign': { kind: 'staff-assign', permission: 'store-staff:assign' },
+  '/micro/stores/staff-assign': { kind: 'platform-membership', permission: '' },
+  '/micro/stores/staff-unassign': { kind: 'platform-membership', permission: '' },
   '/micro/stores/reports': { kind: 'reports', permission: 'store-daily-report:read' },
   '/micro/stores/daily-report-create': { kind: 'report-create', permission: 'store-daily-report:create' },
   '/micro/stores/daily-reports/:id': { kind: 'report-detail', permission: 'store-daily-report:read' },
@@ -145,6 +154,7 @@ export function routeView(routePath: string): StoresRoute { return routeMatch(ro
 export function canRoute(props: Props | null, routePath: string): boolean {
   const matched = routeMatch(routePath)
   if (!validContext(props) || !matched) return false
+  if (matched.route.kind === 'platform-membership') return true // Static migration guidance never reads member data.
   const expected = routePaths[matched.template]!
   const pending: unknown[] = [...props.menus]
   const visited = new Set<unknown>()

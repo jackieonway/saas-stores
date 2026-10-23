@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Stores embedded bootstrap manifest",
-  "description": "Reviewed compile-time stores definition. Exactly eleven ordered menus, no default grants. Menu status declares expected availability; current menu management API does not expose a status field.",
+  "description": "Reviewed compile-time stores definition. Exactly nine ordered menus for seven business permissions, no default grants. Platform maintains STORE organizations and members.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -116,8 +116,8 @@
     },
     "menus": {
       "type": "array",
-      "minItems": 11,
-      "maxItems": 11,
+      "minItems": 9,
+      "maxItems": 9,
       "items": false,
       "prefixItems": [
         {
@@ -398,110 +398,6 @@
           ],
           "properties": {
             "key": {
-              "const": "store-staff:assign"
-            },
-            "parentKey": {
-              "const": "root"
-            },
-            "type": {
-              "const": "MENU"
-            },
-            "title": {
-              "type": "string"
-            },
-            "path": {
-              "const": "/micro/stores/staff-assign"
-            },
-            "permission": {
-              "const": "store-staff:assign"
-            },
-            "sortOrder": {
-              "const": 5
-            },
-            "visible": {
-              "const": true
-            },
-            "linkTarget": {
-              "const": "MICRO"
-            },
-            "linkUrl": {
-              "const": ""
-            },
-            "status": {
-              "const": "ENABLED"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "key",
-            "parentKey",
-            "type",
-            "title",
-            "path",
-            "permission",
-            "sortOrder",
-            "visible",
-            "linkTarget",
-            "linkUrl",
-            "status"
-          ],
-          "properties": {
-            "key": {
-              "const": "store-staff:unassign"
-            },
-            "parentKey": {
-              "const": "root"
-            },
-            "type": {
-              "const": "BUTTON"
-            },
-            "title": {
-              "type": "string"
-            },
-            "path": {
-              "const": ""
-            },
-            "permission": {
-              "const": "store-staff:unassign"
-            },
-            "sortOrder": {
-              "const": 6
-            },
-            "visible": {
-              "const": false
-            },
-            "linkTarget": {
-              "const": "BLANK"
-            },
-            "linkUrl": {
-              "const": ""
-            },
-            "status": {
-              "const": "ENABLED"
-            }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "key",
-            "parentKey",
-            "type",
-            "title",
-            "path",
-            "permission",
-            "sortOrder",
-            "visible",
-            "linkTarget",
-            "linkUrl",
-            "status"
-          ],
-          "properties": {
-            "key": {
               "const": "store-daily-report:read"
             },
             "parentKey": {
@@ -520,7 +416,7 @@
               "const": "store-daily-report:read"
             },
             "sortOrder": {
-              "const": 7
+              "const": 5
             },
             "visible": {
               "const": true
@@ -572,7 +468,7 @@
               "const": "store-daily-report:read"
             },
             "sortOrder": {
-              "const": 8
+              "const": 6
             },
             "visible": {
               "const": false
@@ -624,7 +520,7 @@
               "const": "store-daily-report:create"
             },
             "sortOrder": {
-              "const": 9
+              "const": 7
             },
             "visible": {
               "const": true
@@ -676,7 +572,7 @@
               "const": "store-daily-report:update"
             },
             "sortOrder": {
-              "const": 10
+              "const": 8
             },
             "visible": {
               "const": false

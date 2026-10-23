@@ -294,7 +294,7 @@ async fn call(
                 .members(
                     TOKEN,
                     Resource::Staff,
-                    Action::Assign,
+                    Action::Read,
                     organization,
                     2,
                     50,
@@ -355,7 +355,7 @@ async fn requests_use_fixed_stores_paths_and_the_correct_basic_or_bearer_identit
         query(&requests[3]),
         BTreeMap::from([
             ("resource".into(), "store-staff".into()),
-            ("action".into(), "assign".into()),
+            ("action".into(), "read".into()),
             ("organizationId".into(), ORGANIZATION.into()),
             ("page".into(), "2".into()),
             ("size".into(), "50".into()),

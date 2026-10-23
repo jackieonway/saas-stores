@@ -1,6 +1,6 @@
 # 门店发布与运维
 
-后端和前端分别构建、分别发布。前端是 qiankun HTML / TRUSTED 静态包，后端使用专属 PostgreSQL 数据库。平台、门店 API 和静态服务通过公开 HTTPS 网关组合，机密客户端凭据只注入 API 进程。
+后端和前端分别构建、分别发布。前端是 qiankun HTML / TRUSTED 静态包，后端使用专属 PostgreSQL 数据库。平台须提供 STORE 类型及受控组织 / 成员接口，统一维护组织身份和成员；门店应用只维护营业业务。平台、门店 API 和静态服务通过公开 HTTPS 网关组合，机密客户端凭据只注入 API 进程。
 
 ## 构建镜像
 
@@ -44,6 +44,8 @@ docker compose --env-file /srv/saas/private/stores.env -f compose.yml logs --tai
 
 `stores-postgres` 通过健康检查后启动 `stores-api`。服务首次启动应用内嵌迁移，后续启动核验迁移 checksum 与 schema fingerprint。前端默认映射宿主回环 `3014:8080`，API 默认回环 `3031:3031`；`API_PORT`、`FRONTEND_PORT` 可在 env 文件调整。共享 edge 网络允许网关访问容器服务名。
 
+升级到平台 STORE 方案前备份业务库。新 0002 迁移保留技术 ID、日报和旧关联，先验证 v1 fingerprint，再冻结旧名称修改并禁止旧关联表写入，最后建立 v2 fingerprint。非 STORE 历史映射不会自动改类型或删除；由平台明确创建 / 维护 STORE，再完善对应营业资料。旧程序若依赖名称或 staff 写入将不兼容新约束，回退前必须验证兼容性。
+
 API 结构校验失败时停止发布，定位历史或迁移差异；不要删除数据库卷或手改 checksum 解决。静态容器 `/healthz` 只证明静态服务工作；业务 readiness 为 `/stores-api/health/ready`。
 
 ## 网关与平台登记
@@ -59,7 +61,7 @@ API 结构校验失败时停止发布，定位历史或迁移差异；不要删�
 
 宿主需要启用 qiankun 的可信 HTML 加载策略，并使其 CSP 允许实际静态与 API 来源；使用宿主策略生成器时核对 `trustedHtmlEval` 与应用来源白名单。子应用响应头不能替宿主页面放开执行策略。业务私有 `/stores-api/internal`、`/stores-api/internal/...` 及指标兼容路径应在公开网关返回 `404`。
 
-平台应用 code 固定 `stores`、基址 `/micro/stores`，登记 `entryType=HTML`、`runtimeMode=TRUSTED`，入口指向真实新版本的 `index.html`。登记模板在 [bootstrap.manifest.json](../manifests/bootstrap.manifest.json)。修改文件不会自动迁移平台数据库中的旧应用、版本或激活记录，必须逐项核对。
+平台应用 code 固定 `stores`、基址 `/micro/stores`，登记 `entryType=HTML`、`runtimeMode=TRUSTED`，入口指向真实新版本的 `index.html`。登记模板在 [bootstrap.manifest.json](../manifests/bootstrap.manifest.json)。当前 bootstrap 是九个菜单、七种业务权限；新策略登记七个 STORE organizationLookups 和 store/create、store/update、store-staff/read 三个 memberLookups，不再给新角色授 assign/unassign。修改文件不会自动迁移平台数据库中的旧应用、版本或激活记录，必须逐项核对。
 
 外部静态域名也可承载完整 `dist`。这时需要静态 CORS、宿主 CSP 及明确的 API 网关，API 白名单仍使用平台页面 origin。
 
@@ -69,7 +71,7 @@ API 结构校验失败时停止发布，定位历史或迁移差异；不要删�
 
 仓库 `artifacts/micro-apps/stores/versions/1.0.0` 与 `1.0.1` 是历史 iframe 发布，不能用于验收当前 qiankun。生成新版本目录或新镜像，登记新入口并切换激活版本；不可覆盖已使用的同版本字节。单个静态容器只承载一个 dist，不能让所有历史 URL 都指向不断替换的新镜像。
 
-上线前验证公开 HTTPS、证书、静态 MIME / CORS / 缓存 / 404、业务健康、无认证拒绝、普通用户合法与越权操作，再通过浏览器检查 qiankun 挂载、组织切换、撤权、深路由和卸载后重入。数据写入按 [API 恢复规则](../API.md)处理未知结果。
+上线前验证公开 HTTPS、证书、静态 MIME / CORS / 缓存 / 404、业务健康、无认证拒绝、普通用户合法与越权操作、非 STORE / 禁用组织历史排除、成员只读、SELF 本人子组织业务行与非本人拒绝、失效营业联系人显式清空，再通过浏览器检查 qiankun 挂载、组织切换、撤权、深路由和卸载后重入。数据写入按 [API 恢复规则](../API.md)处理未知结果。
 
 ## 升级与恢复
 

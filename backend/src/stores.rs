@@ -18,7 +18,7 @@ const COLUMNS: &str = "id,tenant_id,organization_id,owner_user_id,name,business_
 
 #[derive(Debug)]
 struct Create {
-    name: String,
+    organization: Uuid,
     status: String,
     contact: String,
     manager: Option<Uuid>,
@@ -27,7 +27,6 @@ struct Create {
 #[derive(Debug)]
 struct Patch {
     version: i32,
-    name: Option<String>,
     status: Option<String>,
     contact: Option<String>,
     manager: Option<Option<Uuid>>,
@@ -38,6 +37,7 @@ struct Filters {
     page: u32,
     size: u32,
     pattern: Option<String>,
+    search: String,
     status: Option<String>,
     organization: Option<Uuid>,
 }
@@ -46,9 +46,7 @@ struct Current {
     organization: Uuid,
     owner: Uuid,
     manager: Option<Uuid>,
-    manager_name: Option<String>,
     version: i32,
-    name: String,
     status: String,
     contact: String,
 }
@@ -91,13 +89,19 @@ fn manager(value: &Value) -> Result<Option<Uuid>, ApiError> {
 fn parse_create(body: Value) -> Result<Create, ApiError> {
     let fields = object(
         body,
-        &["name", "businessStatus", "businessContact", "managerUserId"],
+        &[
+            "organizationId",
+            "businessStatus",
+            "businessContact",
+            "managerUserId",
+        ],
     )?;
     Ok(Create {
-        name: text(
-            fields.get("name").ok_or_else(ApiError::validation)?,
-            true,
-            true,
+        organization: domain::uuid(
+            fields
+                .get("organizationId")
+                .and_then(Value::as_str)
+                .ok_or_else(ApiError::validation)?,
         )?,
         status: status(
             fields
@@ -124,7 +128,6 @@ fn parse_update(body: Value) -> Result<Patch, ApiError> {
         body,
         &[
             "version",
-            "name",
             "businessStatus",
             "businessContact",
             "managerUserId",
@@ -135,10 +138,6 @@ fn parse_update(body: Value) -> Result<Patch, ApiError> {
     }
     Ok(Patch {
         version: domain::version(fields.get("version").ok_or_else(ApiError::validation)?)?,
-        name: fields
-            .get("name")
-            .map(|value| text(value, true, true))
-            .transpose()?,
         status: fields.get("businessStatus").map(status).transpose()?,
         contact: fields
             .get("businessContact")
@@ -178,6 +177,7 @@ fn parse_list(raw: Option<&str>) -> Result<Filters, ApiError> {
         page,
         size,
         pattern: (!search.is_empty()).then(|| literal_pattern(search)),
+        search: search.to_owned(),
         status: fields
             .get("businessStatus")
             .map(|value| status(&Value::String(value.clone())))
@@ -210,6 +210,13 @@ fn insertion_error(error: sqlx::Error) -> ApiError {
 
 fn version_conflict() -> ApiError {
     ApiError::new(409, "VERSION_CONFLICT", "门店已被修改，请刷新后重试")
+}
+
+fn require_contact_target(auth: &Authorized, organization: Uuid) -> Result<(), ApiError> {
+    auth.assert_fresh()?;
+    auth.require_organization(organization).map_err(|_| ApiError::new(
+        404, "MEMBER_NOT_FOUND", "当前组织范围无法证明营业联系人仍是该门店成员；请清空营业联系人后保存，或切换到获授权的组织上下文",
+    ))
 }
 
 fn validate_locked(before: &Current, locked: &Current, version: i32) -> Result<(), ApiError> {
@@ -260,6 +267,7 @@ fn filtered<'a>(
     prefix: &str,
     auth: &'a Authorized,
     filters: &'a Filters,
+    matching_organizations: &[Uuid],
 ) -> QueryBuilder<'a, Postgres> {
     let mut sql = scoped(prefix, auth);
     if let Some(organization) = filters.organization {
@@ -269,22 +277,28 @@ fn filtered<'a>(
         sql.push(" AND business_status=").push_bind(status);
     }
     if let Some(pattern) = &filters.pattern {
-        sql.push(" AND (name ILIKE ")
-            .push_bind(pattern)
-            .push(" ESCAPE CHR(92) OR business_contact ILIKE ")
+        sql.push(" AND (organization_id=ANY(")
+            .push_bind(matching_organizations.to_vec())
+            .push("::uuid[]) OR business_contact ILIKE ")
             .push_bind(pattern)
             .push(" ESCAPE CHR(92))");
     }
     sql
 }
 
-fn record(row: PgRow) -> Result<Value, ApiError> {
+fn record(call: &Call<'_>, row: PgRow) -> Result<Value, ApiError> {
+    let organization_id = row
+        .try_get::<Uuid, _>("organization_id")
+        .map_err(database_error)?;
+    let organization = call.organizations.get(organization_id)?;
+    call.auth.assert_fresh()?;
     Ok(json!({
         "id":row.try_get::<Uuid,_>("id").map_err(database_error)?.to_string(),
         "tenantId":row.try_get::<Uuid,_>("tenant_id").map_err(database_error)?.to_string(),
-        "organizationId":row.try_get::<Uuid,_>("organization_id").map_err(database_error)?.to_string(),
+        "organizationId":organization_id.to_string(),
         "ownerUserId":row.try_get::<Uuid,_>("owner_user_id").map_err(database_error)?.to_string(),
-        "name":row.try_get::<String,_>("name").map_err(database_error)?,
+        "name":organization["name"],
+        "organization":organization,
         "businessStatus":row.try_get::<String,_>("business_status").map_err(database_error)?,
         "businessContact":row.try_get::<String,_>("business_contact").map_err(database_error)?,
         "managerUserId":row.try_get::<Option<Uuid>,_>("manager_user_id").map_err(database_error)?.map(|user|user.to_string()),
@@ -300,11 +314,7 @@ fn current(row: PgRow) -> Result<Current, ApiError> {
         organization: row.try_get("organization_id").map_err(database_error)?,
         owner: row.try_get("owner_user_id").map_err(database_error)?,
         manager: row.try_get("manager_user_id").map_err(database_error)?,
-        manager_name: row
-            .try_get("manager_display_name")
-            .map_err(database_error)?,
         version: row.try_get("version").map_err(database_error)?,
-        name: row.try_get("name").map_err(database_error)?,
         status: row.try_get("business_status").map_err(database_error)?,
         contact: row.try_get("business_contact").map_err(database_error)?,
     })
@@ -363,6 +373,7 @@ pub(crate) async fn list(call: &Call<'_>, raw_query: Option<&str>) -> Result<Val
 async fn list_inner(call: &Call<'_>, raw_query: Option<&str>) -> Result<Value, ApiError> {
     require(call.auth, Action::Read)?;
     let filters = parse_list(raw_query)?;
+    let matching_organizations = call.organizations.matching_names(&filters.search);
     let mut transaction = crate::telemetry::begin(call.pool)
         .await
         .map_err(database_error)?;
@@ -374,6 +385,7 @@ async fn list_inner(call: &Call<'_>, raw_query: Option<&str>) -> Result<Value, A
         "SELECT count(*)::bigint FROM public.stores WHERE ",
         call.auth,
         &filters,
+        &matching_organizations,
     )
     .build_query_scalar()
     .fetch_one(&mut *transaction)
@@ -384,6 +396,7 @@ async fn list_inner(call: &Call<'_>, raw_query: Option<&str>) -> Result<Value, A
         &format!("SELECT {COLUMNS} FROM public.stores WHERE "),
         call.auth,
         &filters,
+        &matching_organizations,
     )
     .push(" ORDER BY created_at DESC,id ASC LIMIT ")
     .push_bind(i64::from(filters.size))
@@ -395,7 +408,7 @@ async fn list_inner(call: &Call<'_>, raw_query: Option<&str>) -> Result<Value, A
     .map_err(database_error)?;
     let records = rows
         .into_iter()
-        .map(record)
+        .map(|row| record(call, row))
         .collect::<Result<Vec<_>, _>>()?;
     call.auth.assert_fresh()?;
     transaction.commit().await.map_err(database_error)?;
@@ -407,15 +420,18 @@ pub(crate) async fn detail(call: &Call<'_>, raw_id: &str) -> Result<Value, ApiEr
     require(call.auth, Action::Read)?;
     let id = domain::uuid(raw_id)?;
     let mut connection = call.pool.acquire().await.map_err(database_error)?;
-    record(load(call, &mut connection, id, false).await?)
+    record(call, load(call, &mut connection, id, false).await?)
 }
 
 pub(crate) async fn create(call: &Call<'_>, body: Value) -> Result<Value, ApiError> {
     require(call.auth, Action::Create)?;
     let body = parse_create(body)?;
-    let organization = call.auth.organization_id();
+    let organization = body.organization;
     call.auth.require_organization(organization)?;
     call.auth.require_row(organization, call.auth.user_id())?;
+    let organization_name = call.organizations.get(organization)?["name"]
+        .as_str()
+        .ok_or_else(ApiError::platform_unavailable)?;
     let member = if let Some(user) = body.manager {
         Some(
             call.authorizer
@@ -444,7 +460,7 @@ pub(crate) async fn create(call: &Call<'_>, body: Value) -> Result<Value, ApiErr
     insert
         .push_bind(id)
         .push(",tenant_id,organization_id,owner_user_id,")
-        .push_bind(&body.name)
+        .push_bind(organization_name)
         .push(",")
         .push_bind(&body.status)
         .push(",")
@@ -468,7 +484,7 @@ pub(crate) async fn create(call: &Call<'_>, body: Value) -> Result<Value, ApiErr
         .await
         .map_err(insertion_error)?
         .ok_or_else(ApiError::database_unavailable)?;
-    let response = record(row)?;
+    let response = record(call, row)?;
     assert_fresh()?;
     audit(call, &mut transaction, organization, id, "create").await?;
     assert_fresh()?;
@@ -492,26 +508,21 @@ pub(crate) async fn update(call: &Call<'_>, raw_id: &str, body: Value) -> Result
         return Err(version_conflict());
     }
     let desired_manager = body.manager.unwrap_or(before.manager);
-    let manager_changed = desired_manager != before.manager;
-    // Preserving or clearing the old relation must work even after its member
-    // has left the platform. A new nonempty target needs fresh HTTP evidence.
-    let member = if manager_changed {
-        if let Some(user) = desired_manager {
-            call.auth.require_organization(before.organization)?;
-            Some(
-                call.authorizer
-                    .verify_member(
-                        call.auth,
-                        call.token,
-                        before.organization,
-                        user,
-                        call.request_id,
-                    )
-                    .await?,
-            )
-        } else {
-            None
-        }
+    // Every retained nonempty business contact is a current platform member;
+    // an unrelated business-field edit must not perpetuate stale membership.
+    let member = if let Some(user) = desired_manager {
+        require_contact_target(call.auth, before.organization)?;
+        Some(
+            call.authorizer
+                .verify_member(
+                    call.auth,
+                    call.token,
+                    before.organization,
+                    user,
+                    call.request_id,
+                )
+                .await?,
+        )
     } else {
         None
     };
@@ -530,19 +541,13 @@ pub(crate) async fn update(call: &Call<'_>, raw_id: &str, body: Value) -> Result
     let locked = current(load(call, &mut transaction, id, true).await?)?;
     validate_locked(&before, &locked, body.version)?;
     call.auth.require_row(locked.organization, locked.owner)?;
-    if manager_changed && desired_manager.is_some() {
-        call.auth.require_organization(locked.organization)?;
+    if desired_manager.is_some() {
+        require_contact_target(call.auth, locked.organization)?;
     }
     assert_fresh()?;
-    let manager_name = if !manager_changed {
-        locked.manager_name.as_deref()
-    } else {
-        member.as_ref().map(|member| member.display_name())
-    };
-    let mut update = QueryBuilder::<Postgres>::new("UPDATE public.stores SET name=");
+    let manager_name = member.as_ref().map(|member| member.display_name());
+    let mut update = QueryBuilder::<Postgres>::new("UPDATE public.stores SET business_status=");
     update
-        .push_bind(body.name.as_deref().unwrap_or(&locked.name))
-        .push(",business_status=")
         .push_bind(body.status.as_deref().unwrap_or(&locked.status))
         .push(",business_contact=")
         .push_bind(body.contact.as_deref().unwrap_or(&locked.contact))
@@ -565,7 +570,7 @@ pub(crate) async fn update(call: &Call<'_>, raw_id: &str, body: Value) -> Result
         .await
         .map_err(database_error)?
         .ok_or_else(ApiError::database_unavailable)?;
-    let response = record(row)?;
+    let response = record(call, row)?;
     assert_fresh()?;
     audit(call, &mut transaction, locked.organization, id, "update").await?;
     assert_fresh()?;
@@ -593,9 +598,7 @@ mod tests {
             organization,
             owner,
             manager,
-            manager_name: Some("Verified manager".to_owned()),
             version,
-            name: "Store".to_owned(),
             status: "OPEN".to_owned(),
             contact: String::new(),
         };
@@ -616,22 +619,22 @@ mod tests {
     #[test]
     fn create_validates_business_fields_and_rejects_client_ownership() {
         let body = parse_create(
-            json!({"name":"  Central  ","businessStatus":"OPEN","businessContact":""}),
+            json!({"organizationId":USER,"businessStatus":"OPEN","businessContact":""}),
         )
         .unwrap();
-        assert_eq!(body.name, "Central");
+        assert_eq!(body.organization, domain::uuid(USER).unwrap());
         assert!(body.manager.is_none());
-        assert!(parse_create(json!({"name":"店","businessStatus":"CLOSED","businessContact":"x","managerUserId":null})).unwrap().manager.is_none());
+        assert!(parse_create(json!({"organizationId":USER,"businessStatus":"CLOSED","businessContact":"x","managerUserId":null})).unwrap().manager.is_none());
         for body in [
-            json!({"name":" ","businessStatus":"OPEN","businessContact":""}),
-            json!({"name":"店","businessStatus":"open","businessContact":""}),
-            json!({"name":"店","businessStatus":"OPEN"}),
-            json!({"name":"店","businessStatus":"OPEN","businessContact":null}),
-            json!({"name":"店","businessStatus":"OPEN","businessContact":"","managerUserId":"invalid"}),
-            json!({"name":"店","businessStatus":"OPEN","businessContact":"","ownerUserId":USER}),
-            json!({"name":"店","businessStatus":"OPEN","businessContact":"","organizationId":USER}),
-            json!({"name":"店","businessStatus":"OPEN","businessContact":"","tenantId":USER}),
-            json!({"name":"店","businessStatus":"OPEN","businessContact":"","managerDisplayName":"untrusted"}),
+            json!({"organizationId":"invalid","businessStatus":"OPEN","businessContact":""}),
+            json!({"organizationId":USER,"businessStatus":"open","businessContact":""}),
+            json!({"organizationId":USER,"businessStatus":"OPEN"}),
+            json!({"organizationId":USER,"businessStatus":"OPEN","businessContact":null}),
+            json!({"organizationId":USER,"businessStatus":"OPEN","businessContact":"","managerUserId":"invalid"}),
+            json!({"organizationId":USER,"businessStatus":"OPEN","businessContact":"","ownerUserId":USER}),
+            json!({"organizationId":USER,"businessStatus":"OPEN","businessContact":"","name":"platform-owned"}),
+            json!({"organizationId":USER,"businessStatus":"OPEN","businessContact":"","tenantId":USER}),
+            json!({"organizationId":USER,"businessStatus":"OPEN","businessContact":"","managerDisplayName":"untrusted"}),
         ] {
             assert_eq!(parse_create(body).unwrap_err().status(), 400);
         }
@@ -639,7 +642,7 @@ mod tests {
 
     #[test]
     fn update_preserves_the_distinction_between_omitted_and_cleared_manager() {
-        let keep = parse_update(json!({"version":1,"name":"new"})).unwrap();
+        let keep = parse_update(json!({"version":1,"businessContact":"new"})).unwrap();
         let clear = parse_update(json!({"version":1,"managerUserId":null})).unwrap();
         let set = parse_update(json!({"version":1,"managerUserId":USER})).unwrap();
         assert_eq!(keep.manager, None);
@@ -647,9 +650,11 @@ mod tests {
         assert_eq!(set.manager, Some(Some(domain::uuid(USER).unwrap())));
         for body in [
             json!({"version":1}),
-            json!({"version":0,"name":"new"}),
-            json!({"version":1.0,"name":"new"}),
+            json!({"version":0,"businessContact":"new"}),
+            json!({"version":1.0,"businessContact":"new"}),
             json!({"version":1,"name":null}),
+            json!({"version":1,"name":"platform-owned"}),
+            json!({"version":1,"organizationId":USER}),
             json!({"version":1,"businessStatus":null}),
             json!({"version":1,"businessContact":null}),
             json!({"version":1,"managerUserId":false}),
@@ -662,15 +667,10 @@ mod tests {
 
     #[test]
     fn text_limits_count_characters_and_never_accept_postgres_nul() {
-        assert!(parse_create(json!({"name":"店".repeat(200),"businessStatus":"OPEN","businessContact":"人".repeat(200)})).is_ok());
-        for (name, contact) in [
-            ("店".repeat(201), String::new()),
-            ("店".to_owned(), "人".repeat(201)),
-            ("店\0".to_owned(), String::new()),
-            ("店".to_owned(), "x\0".to_owned()),
-        ] {
+        assert!(parse_create(json!({"organizationId":USER,"businessStatus":"OPEN","businessContact":"人".repeat(200)})).is_ok());
+        for contact in ["人".repeat(201), "x\0".to_owned()] {
             assert!(parse_create(
-                json!({"name":name,"businessStatus":"OPEN","businessContact":contact})
+                json!({"organizationId":USER,"businessStatus":"OPEN","businessContact":contact})
             )
             .is_err());
         }

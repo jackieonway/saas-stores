@@ -34,16 +34,13 @@ impl Resource {
             (
                 Self::Store | Self::DailyReport,
                 Action::Read | Action::Create | Action::Update
-            ) | (
-                Self::Staff,
-                Action::Read | Action::Assign | Action::Unassign
-            )
+            ) | (Self::Staff, Action::Read)
         )
     }
     pub(crate) const fn member_lookup(self, action: Action) -> bool {
         matches!(
             (self, action),
-            (Self::Store, Action::Create | Action::Update) | (Self::Staff, Action::Assign)
+            (Self::Store, Action::Create | Action::Update) | (Self::Staff, Action::Read)
         )
     }
 }
@@ -98,6 +95,8 @@ pub(crate) struct Authorized {
     resource: Resource,
     action: Action,
     expires_at: i64,
+    context_version: String,
+    organization_deadline: Option<std::time::Instant>,
 }
 
 impl Authorized {
@@ -125,8 +124,48 @@ impl Authorized {
     pub(crate) fn grant_organization_ids(&self) -> &[Uuid] {
         &self.grant_organization_ids
     }
+    pub(crate) fn context_version(&self) -> &str {
+        &self.context_version
+    }
+    pub(crate) fn allows_organization_metadata(&self, org: Uuid) -> bool {
+        self.within_ceiling(org)
+            && match self.scope {
+                Scope::SelfOnly => {
+                    self.grant_organization_ids.is_empty()
+                        || self.grant_organization_ids.contains(&org)
+                }
+                Scope::Org => org == self.organization_id,
+                Scope::OrgSubtree => self.grant_organization_ids.contains(&org),
+                Scope::Tenant => true,
+            }
+    }
+    pub(crate) fn bind_store_organizations(
+        &mut self,
+        organizations: Vec<Uuid>,
+        deadline: std::time::Instant,
+    ) -> Result<(), ApiError> {
+        self.assert_fresh()?;
+        if organizations
+            .iter()
+            .any(|id| !self.allows_organization_metadata(*id))
+        {
+            return Err(ApiError::platform_unavailable());
+        }
+        self.organization_ceiling = Some(organizations);
+        self.organization_deadline = Some(deadline);
+        self.assert_fresh()
+    }
     pub(crate) fn assert_fresh(&self) -> Result<(), ApiError> {
-        if self.expires_at <= now_millis() {
+        if self
+            .organization_deadline
+            .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+        {
+            Err(ApiError::new(
+                503,
+                "ORGANIZATION_VALIDATION_EXPIRED",
+                "平台门店组织校验已到期，请重新查询或提交",
+            ))
+        } else if self.expires_at <= now_millis() {
             Err(ApiError::invalid_context())
         } else {
             Ok(())
@@ -278,6 +317,8 @@ pub(super) fn validate_context(
         resource,
         action,
         expires_at: effective_expiry,
+        context_version: hash.to_owned(),
+        organization_deadline: None,
     })
 }
 

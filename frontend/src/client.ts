@@ -2,11 +2,11 @@ import {
   SDK_VERSION, MicroSdkError, requestWithContext, authorizationContextSignature, assertSupportedSdkVersion,
 } from './sdk.ts'
 import {
-  can, canMemberLookup, validContext, validUUID, validBusinessDate, validAmount, normalizeAmount,
+  can, canMemberLookup, canOrganizationLookup, validContext, validUUID, validBusinessDate, validAmount, normalizeAmount,
 } from './domain.ts'
 import type {
   Props, UUID, BusinessDate, DecimalAmount, BusinessStatus, Operation, MemberPurpose,
-  ScopedRow, Store, StaffLink, DailyReport, Member, Page, Summary,
+  ScopedRow, Store, StoreOrganization, OrganizationPage, DailyReport, Member, Page, Summary,
 } from './domain.ts'
 
 export interface RequestOptions { signal?: AbortSignal }
@@ -15,8 +15,9 @@ export interface StoreQuery extends PageQuery { q?: string; businessStatus?: Bus
 export interface ReportQuery extends PageQuery { dateFrom?: BusinessDate; dateTo?: BusinessDate }
 export interface SummaryQuery { dateFrom: BusinessDate; dateTo: BusinessDate; storeId?: UUID }
 export interface MemberQuery extends PageQuery { organizationId?: UUID; q?: string }
-export interface CreateStore { name: string; businessStatus: BusinessStatus; businessContact: string; managerUserId?: UUID | null }
-export interface UpdateStore { version: number; name?: string; businessStatus?: BusinessStatus; businessContact?: string; managerUserId?: UUID | null }
+export interface OrganizationQuery extends PageQuery { q?: string }
+export interface CreateStore { organizationId: UUID; businessStatus: BusinessStatus; businessContact: string; managerUserId?: UUID | null }
+export interface UpdateStore { version: number; businessStatus?: BusinessStatus; businessContact?: string; managerUserId?: UUID | null }
 export interface CreateDailyReport { businessDate: BusinessDate; amount: DecimalAmount; note?: string }
 export interface UpdateDailyReport { version: number; amount?: DecimalAmount; note?: string }
 export interface ClientSnapshot { readonly props: Props; readonly generation: number; readonly signal: AbortSignal }
@@ -32,12 +33,13 @@ const messages: Record<string, string> = {
   DAILY_REPORT_EXISTS: '该门店当日已有营业记录，请查询并核对现有记录',
   VERSION_CONFLICT: '记录已被修改，请保留输入，重新读取并核对版本',
   RESOURCE_NOT_FOUND: '记录不存在或不在当前授权范围',
-  MEMBER_NOT_FOUND: '该成员已失效或不在目标组织，请重新查询',
+  MEMBER_NOT_FOUND: '无法验证营业联系人，请清空联系人后保存，或切换到有授权的门店组织重新选择',
   VALIDATION_ERROR: '输入格式或范围无效，请检查表单',
   RESPONSE_TOO_LARGE: '服务返回的数据过大，请缩小查询范围',
   CREATE_RESULT_UNKNOWN: '创建结果未知，请保留原输入并先查询核对，勿重复提交',
   WRITE_RESULT_UNKNOWN: '写入结果未知，请保留原输入并先查询核对，勿重复提交',
   MEMBER_VALIDATION_EXPIRED: '成员校验已过期，请保留输入并重新查询核对',
+  PLATFORM_MEMBERSHIP_MANAGED: '门店员工由平台组织管理统一维护，请前往平台调整成员',
   REQUEST_TIMEOUT: '请求超时，请稍后重新查询',
 }
 const kindMessages: Record<BusinessErrorKind, string> = {
@@ -90,20 +92,26 @@ function base(value: Record<string, unknown>) {
     validVersion(value.version) && timestamp(value.createdAt) && timestamp(value.updatedAt) && value.updatedAt >= value.createdAt)
 }
 function storeResponse(value: unknown): Store {
-  keys(value, [...baseFields, 'name', 'businessStatus', 'businessContact', 'managerUserId', 'managerDisplayName'])
+  keys(value, [...baseFields, 'name', 'businessStatus', 'businessContact', 'managerUserId', 'managerDisplayName', 'organization'])
   base(value)
+  const organization = organizationResponse(value.organization)
+  shape(equal(organization.id, value.organizationId as string) && equal(organization.tenantId, value.tenantId as string) && value.name === organization.name)
   shape(text(value.name, 200) && !!value.name.trim() && text(value.businessContact, 200) &&
     (value.businessStatus === 'OPEN' || value.businessStatus === 'CLOSED') &&
     (value.managerUserId === null && value.managerDisplayName === null ||
       validUUID(value.managerUserId) && text(value.managerDisplayName, 100) && !!value.managerDisplayName.trim()))
   return value as unknown as Store
 }
-function staffResponse(value: unknown): StaffLink {
-  keys(value, [...baseFields, 'storeId', 'userId', 'displayName', 'createdByUserId', 'removedAt'])
-  base(value)
-  shape(validUUID(value.storeId) && validUUID(value.userId) && validUUID(value.createdByUserId) &&
-    equal(value.userId, value.ownerUserId as string) && text(value.displayName, 100) && !!value.displayName.trim() && value.removedAt === null)
-  return value as unknown as StaffLink
+const organizationFields = ['contractVersion', 'contextVersion', 'expiresAt', 'revision', 'id', 'tenantId', 'parentId', 'name', 'code', 'organizationType', 'status', 'path', 'province', 'city', 'district', 'township', 'village', 'address', 'contactName', 'contactPhone', 'contactEmail']
+const hash = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+function organizationResponse(value: unknown): StoreOrganization {
+  keys(value, organizationFields)
+  shape(value.contractVersion === '1.0' && hash(value.contextVersion) && hash(value.revision) && timestamp(value.expiresAt) &&
+    validUUID(value.id) && validUUID(value.tenantId) && (value.parentId === null || validUUID(value.parentId)) &&
+    value.organizationType === 'STORE' && value.status === 'ENABLED' &&
+    ['name', 'code', 'path'].every(key => text(value[key], 2048)) && !!(value.name as string).trim() && !!(value.path as string).trim() &&
+    ['province', 'city', 'district', 'township', 'village', 'address', 'contactName', 'contactPhone', 'contactEmail'].every(key => text(value[key], 8192)))
+  return value as unknown as StoreOrganization
 }
 function reportResponse(value: unknown): DailyReport {
   keys(value, [...baseFields, 'storeId', 'businessDate', 'amount', 'note'])
@@ -144,10 +152,10 @@ function queryString(query: object): string {
   return params.size ? '?' + params : ''
 }
 function storeInput(value: unknown, update: boolean) {
-  const fields = ['name', 'businessStatus', 'businessContact', 'managerUserId']
-  keys(value, update ? ['version', ...fields] : fields, update ? ['version'] : ['name', 'businessStatus', 'businessContact'])
+  const fields = ['businessStatus', 'businessContact', 'managerUserId']
+  keys(value, update ? ['version', ...fields] : ['organizationId', ...fields], update ? ['version'] : ['organizationId', 'businessStatus', 'businessContact'])
   shape(!update || validVersion(value.version, true) && fields.some(key => Object.hasOwn(value, key)))
-  if (Object.hasOwn(value, 'name')) shape(text(value.name, 200) && !!value.name.trim())
+  if (!update) shape(validUUID(value.organizationId))
   if (Object.hasOwn(value, 'businessStatus')) shape(value.businessStatus === 'OPEN' || value.businessStatus === 'CLOSED')
   if (Object.hasOwn(value, 'businessContact')) shape(text(value.businessContact, 200))
   if (Object.hasOwn(value, 'managerUserId')) shape(value.managerUserId === null || validUUID(value.managerUserId))
@@ -164,6 +172,7 @@ const statusCodes: Readonly<Record<number, readonly string[]>> = {
   400: ['VALIDATION_ERROR'], 403: ['OPERATION_DENIED', 'DATA_DENIED', 'ORIGIN_DENIED'],
   404: ['RESOURCE_NOT_FOUND', 'MEMBER_NOT_FOUND', 'ROUTE_NOT_FOUND'],
   405: ['METHOD_NOT_ALLOWED'], 409: ['STORE_ALREADY_EXISTS', 'STAFF_ALREADY_ASSIGNED', 'DAILY_REPORT_EXISTS', 'VERSION_CONFLICT'],
+  410: ['PLATFORM_MEMBERSHIP_MANAGED'],
   413: ['BODY_TOO_LARGE'], 415: ['JSON_REQUIRED'],
   503: ['PLATFORM_UNAVAILABLE', 'AUTHORIZATION_UNAVAILABLE', 'DATABASE_UNAVAILABLE', 'MEMBER_VALIDATION_EXPIRED', 'CREATE_RESULT_UNKNOWN', 'WRITE_RESULT_UNKNOWN'],
 }
@@ -375,6 +384,28 @@ export class StoresClient {
     }
   }
   private row<T extends ScopedRow>(value: T, props: Props, operation: Operation): T { shape(can(props, operation, value)); return value }
+  listOrganizations(purpose: Operation, query: OrganizationQuery = {}, options?: RequestOptions): Promise<OrganizationPage> {
+    input(() => { keys(purpose, ['resource', 'action']); keys(query, ['page', 'size', 'q'], []); pageQuery(query); shape(query.q === undefined || text(query.q, 100)) })
+    return this.request('/organizations' + queryString({ resource: purpose.resource, action: purpose.action, ...query }), purpose, (value, props) => {
+      keys(value, ['contractVersion', 'contextVersion', 'expiresAt', 'records', 'total', 'page', 'size'])
+      shape(value.contractVersion === '1.0' && value.contextVersion === props.contextVersion && hash(value.contextVersion) && timestamp(value.expiresAt) && Date.parse(value.expiresAt) > Date.now())
+      const page = pageResponse({ records: value.records, total: value.total, page: value.page, size: value.size }, raw => {
+        const row = organizationResponse(raw)
+        shape(equal(row.tenantId, props.tenant.id) && canOrganizationLookup(props, purpose, row.id) && row.contextVersion === value.contextVersion && Date.parse(row.expiresAt) > Date.now())
+        return row
+      }, query)
+      return { ...page, contractVersion: '1.0', contextVersion: value.contextVersion, expiresAt: value.expiresAt } as OrganizationPage
+    }, options)
+  }
+  getOrganization(id: UUID, purpose: Operation, options?: RequestOptions): Promise<StoreOrganization> {
+    input(() => { shape(validUUID(id)); keys(purpose, ['resource', 'action']) })
+    if (!canOrganizationLookup(this.current(), purpose, id)) throw denied()
+    return this.request('/organizations/' + id + queryString(purpose), purpose, (value, props) => {
+      const row = organizationResponse(value)
+      shape(equal(row.id, id) && equal(row.tenantId, props.tenant.id) && canOrganizationLookup(props, purpose, id) && row.contextVersion === props.contextVersion && Date.parse(row.expiresAt) > Date.now())
+      return row
+    }, options)
+  }
   listStores(query: StoreQuery = {}, options?: RequestOptions): Promise<Page<Store>> {
     input(() => { keys(query, ['page', 'size', 'q', 'businessStatus', 'organizationId'], []); pageQuery(query)
       shape(query.q === undefined || text(query.q, 200)); shape(query.businessStatus === undefined || query.businessStatus === 'OPEN' || query.businessStatus === 'CLOSED')
@@ -392,9 +423,10 @@ export class StoresClient {
   createStore(body: CreateStore, options?: RequestOptions): Promise<Store> {
     input(() => storeInput(body, false))
     body = { ...body }
+    if (!canOrganizationLookup(this.current(), { resource: 'store', action: 'create' }, body.organizationId)) throw denied()
     return this.request('/stores', { resource: 'store', action: 'create' }, (value, props) => {
       const row = this.row(storeResponse(value), props, { resource: 'store', action: 'create' })
-      shape(row.version === 1 && equal(row.organizationId, props.organization.id) && equal(row.ownerUserId, props.user.id)); return row
+      shape(row.version === 1 && equal(row.organizationId, body.organizationId) && equal(row.ownerUserId, props.user.id)); return row
     }, options, 'POST', body, 201)
   }
   updateStore(id: UUID, body: UpdateStore, options?: RequestOptions): Promise<Store> {
@@ -404,25 +436,13 @@ export class StoresClient {
       const row = this.row(storeResponse(value), props, { resource: 'store', action: 'update' }); shape(equal(row.id, id) && row.version === body.version + 1); return row
     }, options, 'PATCH', body)
   }
-  listStaff(storeId: UUID, query: PageQuery = {}, options?: RequestOptions): Promise<Page<StaffLink>> {
-    input(() => { shape(validUUID(storeId)); keys(query, ['page', 'size'], []); pageQuery(query) })
+  listStaff(storeId: UUID, query: PageQuery & { q?: string } = {}, options?: RequestOptions): Promise<Page<Member>> {
+    input(() => { shape(validUUID(storeId)); keys(query, ['page', 'size', 'q'], []); pageQuery(query); shape(query.q === undefined || text(query.q, 100)) })
     return this.request('/stores/' + storeId + '/staff' + queryString(query), { resource: 'store-staff', action: 'read' }, (value, props) =>
-      pageResponse(value, raw => { const row = this.row(staffResponse(raw), props, { resource: 'store-staff', action: 'read' }); shape(equal(row.storeId, storeId)); return row }, query), options)
-  }
-  assignStaff(storeId: UUID, body: { userId: UUID }, options?: RequestOptions): Promise<StaffLink> {
-    input(() => { shape(validUUID(storeId)); keys(body, ['userId']); shape(validUUID(body.userId)) })
-    body = { ...body }
-    return this.request('/stores/' + storeId + '/staff', { resource: 'store-staff', action: 'assign' }, (value, props) => {
-      const row = this.row(staffResponse(value), props, { resource: 'store-staff', action: 'assign' })
-      shape(equal(row.storeId, storeId) && equal(row.userId, body.userId) && equal(row.createdByUserId, props.user.id) && row.version === 1); return row
-    }, options, 'POST', body, 201)
-  }
-  unassignStaff(storeId: UUID, linkId: UUID, body: { version: number }, options?: RequestOptions): Promise<{ ok: true }> {
-    input(() => { shape(validUUID(storeId) && validUUID(linkId)); keys(body, ['version']); shape(validVersion(body.version, true)) })
-    body = { ...body }
-    return this.request('/stores/' + storeId + '/staff/' + linkId, { resource: 'store-staff', action: 'unassign' }, value => {
-      keys(value, ['ok']); shape(value.ok === true); return { ok: true }
-    }, options, 'DELETE', body)
+      pageResponse(value, raw => { const member = memberResponse(raw)
+        shape(canOrganizationLookup(props, { resource: 'store-staff', action: 'read' }, member.organizationId))
+        return member
+      }, query), options)
   }
   listDailyReports(storeId: UUID, query: ReportQuery = {}, options?: RequestOptions): Promise<Page<DailyReport>> {
     input(() => { shape(validUUID(storeId)); keys(query, ['page', 'size', 'dateFrom', 'dateTo'], []); pageQuery(query); dates(query) })

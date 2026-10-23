@@ -3,13 +3,13 @@ export const tenant = id(1), organization = id(2), user = id(3), child = id(4), 
 export const storeId = id(10), staffId = id(11), reportId = id(12), memberId = id(13)
 export const operations = [
   ...['read', 'create', 'update'].map(action => ({ resource: 'store', action })),
-  ...['read', 'assign', 'unassign'].map(action => ({ resource: 'store-staff', action })),
+  { resource: 'store-staff', action: 'read' },
   ...['read', 'create', 'update'].map(action => ({ resource: 'store-daily-report', action })),
 ]
 export const menuDefinitions = [
   ['/micro/stores', ''], ['/micro/stores/stores/:id', 'store:read'],
   ['/micro/stores/store-create', 'store:create'], ['/micro/stores/staff', 'store-staff:read'],
-  ['/micro/stores/staff-assign', 'store-staff:assign'], ['/micro/stores/reports', 'store-daily-report:read'],
+  ['/micro/stores/reports', 'store-daily-report:read'],
   ['/micro/stores/daily-reports/:id', 'store-daily-report:read'],
   ['/micro/stores/daily-report-create', 'store-daily-report:create'],
 ]
@@ -39,9 +39,10 @@ export function grantContext(operation, scope = 'ORG', overrides = {}) {
 }
 export const baseRow = { tenantId: tenant, organizationId: organization, ownerUserId: user,
   version: 1, createdAt: '2026-10-18T01:00:00.000Z', updatedAt: '2026-10-18T01:00:00.000Z' }
-export const store = { ...baseRow, id: storeId, name: '城北门店', businessStatus: 'OPEN', businessContact: '', managerUserId: null, managerDisplayName: null }
-export const staff = { ...baseRow, id: staffId, storeId, userId: memberId, ownerUserId: memberId,
-  createdByUserId: user, displayName: '门店员工', removedAt: null }
+export const platformOrganization = { contractVersion: '1.0', contextVersion: 'a'.repeat(64), expiresAt: '2027-01-01T00:00:00.000Z', revision: 'b'.repeat(64), id: organization, tenantId: tenant, parentId: null, name: '城北门店', code: 'STORE-01', organizationType: 'STORE', status: 'ENABLED', path: '/总部/城北门店', province: '', city: '', district: '', township: '', village: '', address: '城北路1号', contactName: '', contactPhone: '', contactEmail: '' }
+export const organizationPage = (row = platformOrganization, pageNumber = 1, size = 10) => ({ contractVersion: '1.0', contextVersion: row?.contextVersion || 'a'.repeat(64), expiresAt: '2027-01-01T00:00:00.000Z', ...page(row, pageNumber, size) })
+export const store = { ...baseRow, id: storeId, name: platformOrganization.name, organization: platformOrganization, businessStatus: 'OPEN', businessContact: '', managerUserId: null, managerDisplayName: null }
+export const staff = { id: memberId, organizationId: organization, displayName: '门店员工' }
 export const report = { ...baseRow, id: reportId, storeId, businessDate: '2026-10-18', amount: '9999999999999999.99', note: '营业录入' }
 export const member = { id: memberId, organizationId: organization, displayName: '门店员工' }
 export const page = (row, pageNumber = 1, size = 20) => ({ records: row ? [row] : [], total: row ? 1 : 0, page: pageNumber, size })

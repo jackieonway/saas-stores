@@ -14,17 +14,15 @@ test('all actual HTTP methods use current Bearer, omit cookies and preserve wire
   const cases = [
     ['listStores', [ { q: '门店%_\\', size: 20 } ], page(store), 200, 'GET', '/stores?q=%E9%97%A8%E5%BA%97%25_%5C&size=20'],
     ['getStore', [storeId], store, 200, 'GET', '/stores/' + storeId],
-    ['createStore', [{ name: '城北门店', businessStatus: 'OPEN', businessContact: '', managerUserId: null }], store, 201, 'POST', '/stores'],
+    ['createStore', [{ organizationId: organization, businessStatus: 'OPEN', businessContact: '', managerUserId: null }], store, 201, 'POST', '/stores'],
     ['updateStore', [storeId, { version: 1, businessStatus: 'CLOSED', managerUserId: null }], { ...store, version: 2, businessStatus: 'CLOSED' }, 200, 'PATCH', '/stores/' + storeId],
     ['listStaff', [storeId], page(staff), 200, 'GET', '/stores/' + storeId + '/staff'],
-    ['assignStaff', [storeId, { userId: memberId }], staff, 201, 'POST', '/stores/' + storeId + '/staff'],
-    ['unassignStaff', [storeId, staffId, { version: 1 }], { ok: true }, 200, 'DELETE', '/stores/' + storeId + '/staff/' + staffId],
     ['listDailyReports', [storeId, { dateFrom: report.businessDate, dateTo: report.businessDate }], page(report), 200, 'GET', '/stores/' + storeId + '/daily-reports?dateFrom=2026-10-18&dateTo=2026-10-18'],
     ['getDailyReport', [reportId], report, 200, 'GET', '/daily-reports/' + reportId],
     ['createDailyReport', [storeId, { businessDate: report.businessDate, amount: report.amount, note: report.note }], report, 201, 'POST', '/stores/' + storeId + '/daily-reports'],
     ['updateDailyReport', [reportId, { version: 1, amount: '9007199254740993.01' }], { ...report, version: 2, amount: '9007199254740993.01' }, 200, 'PATCH', '/daily-reports/' + reportId],
     ['getSummary', [{ dateFrom: '2026-10-01', dateTo: '2026-10-31' }], { count: 2, totalAmount: '19999999999999999.98', dateFrom: '2026-10-01', dateTo: '2026-10-31', storeId: null }, 200, 'GET', '/daily-reports/summary?dateFrom=2026-10-01&dateTo=2026-10-31'],
-    ['listMembers', [{ resource: 'store-staff', action: 'assign' }, { q: '员工' }], page(member), 200, 'GET', '/members?resource=store-staff&action=assign&q=%E5%91%98%E5%B7%A5&organizationId=' + organization],
+    ['listMembers', [{ resource: 'store', action: 'create' }, { q: '员工' }], page(member), 200, 'GET', '/members?resource=store&action=create&q=%E5%91%98%E5%B7%A5&organizationId=' + organization],
   ]
   for (const [method, args, result, status, verb, suffix] of cases) await t.test(method, async () => {
     const calls = [], props = context()
@@ -50,7 +48,6 @@ test('all actual HTTP methods use current Bearer, omit cookies and preserve wire
 test('staff, reports and member writes operate without an implicit store read', async () => {
   for (const [purpose, method, args, result, status] of [
     [{ resource: 'store-staff', action: 'read' }, 'listStaff', [storeId], page(staff), 200],
-    [{ resource: 'store-staff', action: 'assign' }, 'assignStaff', [storeId, { userId: memberId }], staff, 201],
     [{ resource: 'store-daily-report', action: 'create' }, 'createDailyReport', [storeId, { businessDate: report.businessDate, amount: '1.00' }], { ...report, amount: '1.00' }, 201],
   ]) {
     const paths = [], client = clientWith(async url => { paths.push(url); return response(result, status) }, grantContext(purpose))
@@ -71,9 +68,9 @@ test('strict runtime DTO validation rejects incorrect paging, identities, owner 
     ['extra field', 'getStore', [storeId], { ...store, clientSecret: 'SECRET' }],
     ['unpaired manager', 'getStore', [storeId], { ...store, managerUserId: memberId }],
     ['invalid timestamp day', 'getStore', [storeId], { ...store, updatedAt: '2026-02-30T01:00:00.000Z' }],
-    ['staff creator is not owner', 'listStaff', [storeId], page({ ...staff, ownerUserId: user })],
-    ['removed staff', 'listStaff', [storeId], page({ ...staff, removedAt: '2026-10-18T01:00:00.000Z' })],
-    ['wrong staff store', 'listStaff', [storeId], page({ ...staff, storeId: id(89) })],
+    ['staff no longer accepts local owner metadata', 'listStaff', [storeId], page({ ...staff, ownerUserId: user })],
+    ['staff extra relationship metadata', 'listStaff', [storeId], page({ ...staff, version: 1 })],
+    ['staff outside organization ceiling', 'listStaff', [storeId], page({ ...staff, organizationId: outside })],
     ['number amount', 'getDailyReport', [reportId], { ...report, amount: 1 }],
     ['unfixed amount', 'getDailyReport', [reportId], { ...report, amount: '1.2' }],
     ['impossible date', 'getDailyReport', [reportId], { ...report, businessDate: '2026-02-29' }],
@@ -99,7 +96,6 @@ test('invalid input is rejected before transport, including implicit report date
     () => client.createDailyReport(storeId, { businessDate: '2026-10-18', amount: 1 }),
     () => client.createDailyReport(storeId, { businessDate: '2026-10-18', amount: '1.001' }),
     () => client.updateDailyReport(reportId, { version: 1, businessDate: '2026-10-18' }),
-    () => client.unassignStaff(storeId, staffId, { version: 2147483647 }),
     () => client.getSummary({ dateFrom: '2026-11-01', dateTo: '2026-10-31' }),
     () => client.getSummary({ dateFrom: '2026-10-01', dateTo: '2026-10-31', size: 10 }),
     () => client.listMembers({ resource: 'store', action: 'read' }),
@@ -215,7 +211,7 @@ test('pre-dispatch cancellation sends nothing and independent writes survive a d
   let calls = 0
   const client = clientWith((_url, init) => { calls++; return init.method === 'GET' ? read.promise : write.promise })
   try {
-    await assert.rejects(client.createStore({ name: '城北门店', businessStatus: 'OPEN', businessContact: '' }, { signal: stopped.signal }), error => error.name === 'AbortError')
+    await assert.rejects(client.createStore({ organizationId: organization, businessStatus: 'OPEN', businessContact: '' }, { signal: stopped.signal }), error => error.name === 'AbortError')
     assert.equal(calls, 0)
     const pendingRead = rejection(client.listStores({}, { signal: route.signal })), pendingWrite = client.updateStore(storeId, { version: 1, businessStatus: 'CLOSED' })
     route.abort(); assert.equal((await pendingRead).name, 'AbortError')
@@ -228,7 +224,7 @@ test('bounded safe business codes distinguish unique conflict from version confl
   for (const code of ['STORE_ALREADY_EXISTS', 'STAFF_ALREADY_ASSIGNED', 'DAILY_REPORT_EXISTS', 'VERSION_CONFLICT']) {
     const client = clientWith(async () => failure(409, code))
     try {
-      await assert.rejects(client.createStore({ name: '门店', businessStatus: 'OPEN', businessContact: '' }), error => {
+      await assert.rejects(client.createStore({ organizationId: organization, businessStatus: 'OPEN', businessContact: '' }), error => {
         assert.equal(error.code, code); assert.equal(error.status, 409); assert.equal(error.unknown, false)
         assert.equal(error.requestId, id(999)); assert.equal(JSON.stringify(error).includes('SECRET'), false); return true
       })
@@ -244,7 +240,7 @@ test('success streaming bodies are bounded and wrong success status marks writes
   try { await assert.rejects(client.getStore(storeId), error => error.status === 413 && error.code === 'RESPONSE_TOO_LARGE') }
   finally { client.dispose() }
   const wrongStatus = clientWith(async () => response(store, 200))
-  try { await assert.rejects(wrongStatus.createStore({ name: '门店', businessStatus: 'OPEN', businessContact: '' }), error => error.kind === 'PROTOCOL' && error.unknown) }
+  try { await assert.rejects(wrongStatus.createStore({ organizationId: organization, businessStatus: 'OPEN', businessContact: '' }), error => error.kind === 'PROTOCOL' && error.unknown) }
   finally { wrongStatus.dispose() }
 })
 
@@ -281,7 +277,7 @@ test('a sent report keeps its confirmed original business date and body if the c
 
 test('wrong-status recovery codes are discarded rather than changing conflict semantics', async () => {
   const client = clientWith(async () => failure(409, 'CREATE_RESULT_UNKNOWN'))
-  try { await assert.rejects(client.createStore({ name: '门店', businessStatus: 'OPEN', businessContact: '' }), error => error.code === 'CONFLICT' && error.unknown === false) }
+  try { await assert.rejects(client.createStore({ organizationId: organization, businessStatus: 'OPEN', businessContact: '' }), error => error.code === 'CONFLICT' && error.unknown === false) }
   finally { client.dispose() }
 })
 
@@ -439,7 +435,7 @@ test('a same-pair parallel 200 cannot return data after another request receives
 test('a 403 response is a definite rejection while a concurrent dispatched write remains unknown', async () => {
   const committed = deferred(); let calls = 0
   const client = clientWith(async () => ++calls === 1 ? committed.promise : failure(403, 'DATA_DENIED'))
-  const body = { name: '门店', businessStatus: 'OPEN', businessContact: '' }
+  const body = { organizationId: organization, businessStatus: 'OPEN', businessContact: '' }
   try {
     const pendingCommit = rejection(client.createStore(body))
     const rejected = await rejection(client.createStore(body))

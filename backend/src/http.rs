@@ -14,7 +14,9 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::{
-    authorization::{Action, Authorized, Authorizer, Resource},
+    authorization::{
+        organization_query, Action, Authorized, Authorizer, OrganizationSet, Resource, Scope,
+    },
     error::{ApiError, ServiceError},
     Config,
 };
@@ -29,6 +31,7 @@ pub(crate) struct Call<'a> {
     pub(crate) authorizer: &'a Authorizer,
     pub(crate) token: &'a str,
     pub(crate) request_id: &'a str,
+    pub(crate) organizations: &'a OrganizationSet,
 }
 
 #[derive(Clone)]
@@ -118,6 +121,8 @@ pub(crate) fn configured_metrics_router(
             get(report_detail).patch(report_update),
         )
         .route("/stores-api/members", get(member_list))
+        .route("/stores-api/organizations", get(organization_list))
+        .route("/stores-api/organizations/{id}", get(organization_detail))
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .with_state(state.clone())
@@ -131,14 +136,16 @@ enum Endpoint {
     StoreDetail(String),
     StoreUpdate(String),
     StaffList(String),
-    StaffAssign(String),
-    StaffUnassign(String, String),
+    StaffAssign,
+    StaffUnassign,
     ReportList(String),
     ReportCreate(String),
     ReportDetail(String),
     ReportUpdate(String),
     ReportSummary,
     Members,
+    Organizations,
+    Organization(String),
 }
 
 impl Endpoint {
@@ -148,14 +155,17 @@ impl Endpoint {
             Self::StoreCreate => (Resource::Store, Action::Create),
             Self::StoreUpdate(_) => (Resource::Store, Action::Update),
             Self::StaffList(_) => (Resource::Staff, Action::Read),
-            Self::StaffAssign(_) => (Resource::Staff, Action::Assign),
-            Self::StaffUnassign(_, _) => (Resource::Staff, Action::Unassign),
+            Self::StaffAssign | Self::StaffUnassign => (Resource::Staff, Action::Read),
             Self::ReportList(_) | Self::ReportDetail(_) | Self::ReportSummary => {
                 (Resource::DailyReport, Action::Read)
             }
             Self::ReportCreate(_) => (Resource::DailyReport, Action::Create),
             Self::ReportUpdate(_) => (Resource::DailyReport, Action::Update),
             Self::Members => member_pair(query)?,
+            Self::Organizations | Self::Organization(_) => {
+                let query = organization_query(query, matches!(self, Self::Organization(_)))?;
+                (query.resource, query.action)
+            }
         })
     }
 
@@ -164,18 +174,13 @@ impl Endpoint {
             self,
             Self::StoreCreate
                 | Self::StoreUpdate(_)
-                | Self::StaffAssign(_)
-                | Self::StaffUnassign(_, _)
                 | Self::ReportCreate(_)
                 | Self::ReportUpdate(_)
         )
     }
 
     fn creates(&self) -> bool {
-        matches!(
-            self,
-            Self::StoreCreate | Self::StaffAssign(_) | Self::ReportCreate(_)
-        )
+        matches!(self, Self::StoreCreate | Self::ReportCreate(_))
     }
 }
 
@@ -201,9 +206,40 @@ async fn dispatch(
         .map(|id| id.0.clone())
         .unwrap_or_else(|| Uuid::new_v4().to_string());
     // Authorize before parsing business input or acquiring a business connection.
-    let auth = authorizer
+    let mut auth = authorizer
         .authorize(&token, resource, action, &request_id)
         .await?;
+    // Retired routes authenticate against the remaining member-view permission,
+    // then explain the platform-owned workflow without reading legacy links.
+    if matches!(endpoint, Endpoint::StaffAssign | Endpoint::StaffUnassign) {
+        return Err(ApiError::new(
+            410,
+            "PLATFORM_MEMBERSHIP_MANAGED",
+            "门店成员由平台组织管理统一维护，请在平台调整组织成员",
+        ));
+    }
+    if matches!(
+        endpoint,
+        Endpoint::Organizations | Endpoint::Organization(_)
+    ) {
+        let parsed = organization_query(
+            query.as_deref(),
+            matches!(endpoint, Endpoint::Organization(_)),
+        )?;
+        let id = if let Endpoint::Organization(id) = &endpoint {
+            let id = crate::domain::uuid(id)?;
+            // This public directory is used to choose initialization/member
+            // targets. Internal existing-row metadata resolution is separate.
+            auth.require_organization(id)?;
+            Some(id)
+        } else {
+            None
+        };
+        let result = authorizer
+            .organization_directory(&auth, &token, &parsed, id, &request_id)
+            .await?;
+        return Ok(Json(result).into_response());
+    }
     let body = if endpoint.writes() {
         let mut types = request.headers().get_all("content-type").iter();
         let content_type = types.next().and_then(|value| value.to_str().ok());
@@ -222,12 +258,50 @@ async fn dispatch(
     } else {
         Value::Null
     };
+    // SELF metadata resolution follows existing authorized business rows. The
+    // platform collection deliberately lists only the selected organization.
+    // Finish this read before any HTTP so no pool connection/lock spans it.
+    let self_targets = if auth.scope() == Scope::SelfOnly {
+        if matches!(
+            endpoint,
+            Endpoint::StoreCreate
+                | Endpoint::ReportCreate(_)
+                | Endpoint::StaffList(_)
+                | Endpoint::Members
+        ) {
+            Some(vec![auth.organization_id()])
+        } else {
+            let table = if resource == Resource::DailyReport {
+                "public.store_daily_reports"
+            } else {
+                "public.stores"
+            };
+            let mut sql = sqlx::QueryBuilder::<sqlx::Postgres>::new(format!(
+                "SELECT DISTINCT organization_id FROM {table} WHERE "
+            ));
+            auth.append_scope(&mut sql);
+            let ids = sql
+                .build_query_scalar::<Uuid>()
+                .fetch_all(&state.pool)
+                .await
+                .map_err(|_| ApiError::database_unavailable())?;
+            auth.assert_fresh()?;
+            Some(ids)
+        }
+    } else {
+        None
+    };
+    let organizations = authorizer
+        .store_organizations(&auth, &token, self_targets.as_deref(), &request_id)
+        .await?;
+    auth.bind_store_organizations(organizations.ids(), organizations.deadline())?;
     let call = Call {
         pool: &state.pool,
         auth: &auth,
         authorizer,
         token: &token,
         request_id: &request_id,
+        organizations: &organizations,
     };
     let status = if endpoint.creates() {
         StatusCode::CREATED
@@ -240,10 +314,10 @@ async fn dispatch(
         Endpoint::StoreDetail(id) => crate::stores::detail(&call, &id).await?,
         Endpoint::StoreUpdate(id) => crate::stores::update(&call, &id, body).await?,
         Endpoint::StaffList(id) => crate::staff::list(&call, &id, query.as_deref()).await?,
-        Endpoint::StaffAssign(id) => crate::staff::assign(&call, &id, body).await?,
-        Endpoint::StaffUnassign(store, link) => {
-            crate::staff::unassign(&call, &store, &link, body).await?
-        }
+        Endpoint::StaffAssign
+        | Endpoint::StaffUnassign
+        | Endpoint::Organizations
+        | Endpoint::Organization(_) => unreachable!("handled before business dispatch"),
         Endpoint::ReportList(id) => crate::reports::list(&call, &id, query.as_deref()).await?,
         Endpoint::ReportCreate(id) => crate::reports::create(&call, &id, body).await?,
         Endpoint::ReportDetail(id) => crate::reports::detail(&call, &id).await?,
@@ -283,10 +357,11 @@ no_path!(store_list, StoreList);
 no_path!(store_create, StoreCreate);
 no_path!(report_summary, ReportSummary);
 no_path!(member_list, Members);
+no_path!(organization_list, Organizations);
+one_path!(organization_detail, Organization);
 one_path!(store_detail, StoreDetail);
 one_path!(store_update, StoreUpdate);
 one_path!(staff_list, StaffList);
-one_path!(staff_assign, StaffAssign);
 one_path!(report_list, ReportList);
 one_path!(report_create, ReportCreate);
 one_path!(report_detail, ReportDetail);
@@ -297,8 +372,17 @@ async fn staff_unassign(
     path: Result<Path<(String, String)>, PathRejection>,
     request: Request,
 ) -> Result<Response, ApiError> {
-    let Path((store, link)) = path.map_err(|_| ApiError::validation())?;
-    dispatch(state, request, Endpoint::StaffUnassign(store, link)).await
+    let Path((_store, _link)) = path.map_err(|_| ApiError::validation())?;
+    dispatch(state, request, Endpoint::StaffUnassign).await
+}
+
+async fn staff_assign(
+    State(state): State<AppState>,
+    path: Result<Path<String>, PathRejection>,
+    request: Request,
+) -> Result<Response, ApiError> {
+    let Path(_store) = path.map_err(|_| ApiError::validation())?;
+    dispatch(state, request, Endpoint::StaffAssign).await
 }
 
 fn bearer(headers: &HeaderMap) -> Result<&str, ApiError> {
@@ -650,9 +734,10 @@ mod tests {
     #[test]
     fn member_routes_only_authorize_registered_server_pairs() {
         assert!(member_pair(Some("resource=store&action=create")).is_ok());
-        assert!(member_pair(Some("resource=store-staff&action=assign")).is_ok());
+        assert!(member_pair(Some("resource=store-staff&action=read")).is_ok());
         for query in [
             "resource=store&action=read",
+            "resource=store-staff&action=assign",
             "resource=store-staff&action=unassign",
             "resource=store&resource=store&action=create",
             "resource=store&action=update&action=create",

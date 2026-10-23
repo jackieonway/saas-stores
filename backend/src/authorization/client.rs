@@ -22,6 +22,7 @@ enum ResponseKind {
     Authorization,
     General,
     SingleMember,
+    Organization,
 }
 
 #[derive(Clone)]
@@ -202,6 +203,60 @@ impl PlatformClient {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn organizations(
+        &self,
+        token: &str,
+        resource: Resource,
+        action: Action,
+        page: u32,
+        size: u32,
+        q: &str,
+        request_id: &str,
+    ) -> Result<Value, ApiError> {
+        let url = self
+            .settings
+            .origin
+            .join("/api/apps/stores/organizations")
+            .map_err(|_| ApiError::platform_unavailable())?;
+        self.json(
+            self.http.get(url).bearer_auth(token).query(&[
+                ("resource", resource.as_str().to_owned()),
+                ("action", action.as_str().to_owned()),
+                ("page", page.to_string()),
+                ("size", size.to_string()),
+                ("q", q.to_owned()),
+            ]),
+            request_id,
+            ResponseKind::Organization,
+        )
+        .await
+    }
+
+    pub(super) async fn organization(
+        &self,
+        token: &str,
+        resource: Resource,
+        action: Action,
+        organization: Uuid,
+        request_id: &str,
+    ) -> Result<Value, ApiError> {
+        let url = self
+            .settings
+            .origin
+            .join(&format!("/api/apps/stores/organizations/{organization}"))
+            .map_err(|_| ApiError::platform_unavailable())?;
+        self.json(
+            self.http
+                .get(url)
+                .bearer_auth(token)
+                .query(&[("resource", resource.as_str()), ("action", action.as_str())]),
+            request_id,
+            ResponseKind::Organization,
+        )
+        .await
+    }
+
     async fn json(
         &self,
         request: RequestBuilder,
@@ -234,6 +289,11 @@ impl PlatformClient {
             .map_err(|_| ApiError::platform_unavailable())?;
         let authorization_denial =
             response.status() == StatusCode::FORBIDDEN && kind == ResponseKind::Authorization;
+        let max_body = if kind == ResponseKind::Organization {
+            1024 * 1024
+        } else {
+            MAX_BODY
+        };
         match response.status() {
             StatusCode::OK => {}
             StatusCode::UNAUTHORIZED => return Err(ApiError::invalid_token()),
@@ -247,6 +307,9 @@ impl PlatformClient {
                 ));
             }
             StatusCode::BAD_REQUEST => return Err(ApiError::validation()),
+            StatusCode::NOT_FOUND if kind == ResponseKind::Organization => {
+                return Err(ApiError::not_found())
+            }
             _ => return Err(ApiError::platform_unavailable()),
         }
         if !response
@@ -257,7 +320,7 @@ impl PlatformClient {
             .is_some_and(|media| media.eq_ignore_ascii_case("application/json"))
             || response
                 .content_length()
-                .is_some_and(|length| length > MAX_BODY as u64)
+                .is_some_and(|length| length > max_body as u64)
         {
             return Err(ApiError::platform_unavailable());
         }
@@ -267,7 +330,7 @@ impl PlatformClient {
             .await
             .map_err(|_| ApiError::platform_unavailable())?
         {
-            if chunk.len() > MAX_BODY - body.len() {
+            if chunk.len() > max_body - body.len() {
                 return Err(ApiError::platform_unavailable());
             }
             body.extend_from_slice(&chunk);

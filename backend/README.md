@@ -1,6 +1,6 @@
 # 门店 API 服务
 
-`stores-api` 使用 Rust `1.97.0`、Axum、SQLx 和 PostgreSQL，默认监听 `0.0.0.0:3031`，业务前缀 `/stores-api`。服务拥有自己的数据库与账号，启动时执行并核验内嵌迁移。平台身份和成员资料通过 HTTP 获取。
+`stores-api` 使用 Rust `1.97.0`、Axum、SQLx 和 PostgreSQL，默认监听 `0.0.0.0:3031`，业务前缀 `/stores-api`。服务拥有自己的数据库与账号，启动时执行并核验内嵌迁移。平台身份、有效 STORE 组织投影和直接成员通过 HTTP 获取。平台维护组织身份及成员，服务只维护营业资料、营业联系人和日报。
 
 ## 启动和源码
 
@@ -11,8 +11,8 @@
 | `config.rs`、`lib.rs`、`main.rs` | 配置验证、连接池、迁移、进程启动及限时关闭 |
 | `http.rs` | 路由、Bearer、JSON、CORS 和请求标识 |
 | `authorization/` | 平台 HTTP 协议、身份与数据授权校验 |
-| `stores.rs`、`staff.rs`、`reports.rs` | 门店、员工关联、日报和汇总 |
-| `directory.rs` | 受控成员目录用途校验 |
+| `stores.rs`、`staff.rs`、`reports.rs` | 营业档案、平台成员只读视图、日报和汇总 |
+| `directory.rs` | 受控成员目录用途及搜索 / 分页校验 |
 | `domain.rs` | 金额、日期、UUID、版本、查询与分页规则 |
 | `migrations.rs`、`migrations/` | 迁移历史和数据库结构契约 |
 | `telemetry.rs` | 受保护指标及固定分类诊断 |
@@ -58,13 +58,13 @@ PostgreSQL URI 只接受 `sslmode` / `ssl-mode`、根证书 `sslrootcert` / `ssl
 
 这两种方式消费的服务端授权契约仍为 `1.0`；前端 SDK 上下文契约为 `2.0`，两者版本不能混用。后端要求身份、租户、当前组织、app code、contextVersion、有效期和对应资源动作一致，并叠加组织硬边界与数据授权。
 
-负责人及员工选择使用 `/api/apps/stores/members` 和 `/members/{user}`，可查用途必须先在平台策略中登记，详见 [成员契约](docs/member-contract.md)。公开应用与菜单示例在 `manifests/bootstrap.manifest.json`，数据授权示例在 `manifests/grants.manifest.example.json`，平台数据策略示例在 `policy.example.json`。
+营业联系人验证及平台成员读取使用 `/api/apps/stores/members` 和 `/members/{user}`，可查用途必须先在平台策略中登记，详见 [成员契约](docs/member-contract.md)。有效 STORE 查询使用 `/api/apps/stores/organizations` 和 `/organizations/{id}`，七种用途必须登记为 `organizationLookups`。每个投影绑定原授权 contextVersion，窗口最长三秒，所有业务 SQL 与允许的 STORE 集合相交。公开应用与菜单示例在 `manifests/bootstrap.manifest.json`，数据授权示例在 `manifests/grants.manifest.example.json`，平台数据策略示例在 `policy.example.json`。
 
 ## 数据和运维边界
 
-数据库包含门店、员工关联、日报和审计事件。当前每个租户组织只能有一间门店，门店同一营业日只能有一份日报。更新采用整数 `version` 乐观并发；金额以十进制字符串传输。详情、分页、汇总和写入都受相同授权范围约束，完整输入和恢复规则见 [API](API.md)。
+数据库包含营业档案、历史员工关联、日报和审计事件。当前每个 tenant / STORE organization 只能有一份营业档案，同一门店同一营业日只能有一份日报。平台名称、编码、地址和层级不接受业务写入；名称响应来自平台实时投影，成员列表来自平台直接成员。旧 staff 写路由返回 410，不再写关联表。更新采用整数 `version` 乐观并发；金额以十进制字符串传输。详情、分页、汇总和写入都受相同授权范围约束，完整输入和恢复规则见 [API](API.md)。
 
-迁移历史 checksum 和 schema fingerprint 不匹配时拒绝启动或就绪。通过新增迁移演进结构；不要改写已执行 SQL、迁移历史或 fingerprint 来跳过校验。存活接口只证明进程可响应，就绪接口同时校验业务库结构。
+`0002_platform_owned_store_identity.sql` 先验证原 v1 结构，再冻结旧 stores.name 实际修改、阻止 store_staff 写入并建立 v2 fingerprint；原 0001、v1 函数与 baseline 字节保持不变，旧映射和历史数据不自动删除或转类型。迁移历史 checksum 和 schema fingerprint 不匹配时拒绝启动或就绪。通过新增迁移演进结构；不要改写已执行 SQL、迁移历史或 fingerprint 来跳过校验。存活接口只证明进程可响应，就绪接口同时校验业务库结构。
 
 ```sh
 cargo fmt --all -- --check

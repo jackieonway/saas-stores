@@ -1,134 +1,123 @@
 # 门店 HTTP API
 
-所有路径以 `/stores-api` 开头。路由实现位于 `src/http.rs`，请求规则位于 `stores.rs`、`staff.rs`、`reports.rs`、`directory.rs` 和 `domain.rs`。下文中的 `{id}`、`{store}`、`{link}` 均为非 nil、带连字符的标准 UUID。
+业务前缀为 `/stores-api`。门店是平台 `organizationType=STORE` 的组织，平台维护名称、编码、层级、地址和成员；本服务只维护对应门店的营业资料、营业联系人、日报和审计。门店档案的 `id` 是业务技术 ID，`organizationId` 是平台组织 ID，二者不能混用。
 
-## 身份、授权与响应
+## 身份与数据边界
 
-业务请求必须提供唯一的 `Authorization: Bearer <stores 应用令牌>`。服务不从 Cookie 取身份，不接受客户端设置租户、owner 或组织归属。API 重新向平台校验当前身份与对应资源动作；功能 permission、独立数据授权以及租户 / 组织硬边界必须同时满足。
+每次业务请求必须携带唯一的 `Authorization: Bearer <stores 应用令牌>`，服务重新校验平台身份、当前应用、资源动作、功能权限和数据授权，再取当前有效 STORE 组织投影。Cookie 不作为身份。业务正文不能设置租户或 owner。
 
-每个资源使用自己的授权。员工与日报操作不隐式要求 `store:read`；目标门店仍须落在当前动作允许的租户和组织范围。`SELF` 分别按门店创建人、员工关联的员工本人、日报录入人判断，负责人变更不会改变 owner。
+所有列表、总数、详情、日报、汇总和写入同时受租户、组织硬边界、资源动作数据授权及新鲜 STORE 组织集合限制。禁用、到期、非 STORE、无应用授权或范围外组织的历史数据不参与当前结果。历史映射不会自动改类型或删除。
 
-成功业务响应直接返回记录或分页对象，没有额外 `data` 包装。创建返回 `201`，其他成功操作返回 `200`。分页格式：
+`SELF` 门店行要求 `ownerUserId=当前操作人`，日报行要求录入人为当前操作人；组织元数据的单项解析不证明业务行所有权。已有本人业务行可位于硬边界与 grant 允许的子组织。新建绑定、组织选择和成员查找的 SELF 目标仍仅为当前组织。`ORG`、`ORG_SUBTREE`、`TENANT` 继续与硬边界相交。成员查看、日报使用各自授权，不额外要求 `store:read`。
 
-```json
-{"records":[],"total":0,"page":1,"size":20}
-```
+成功响应直接返回记录或分页，没有 `data` 包装。创建返回 `201`，读取及更新返回 `200`。错误为 `{"code":"...","message":"..."}`。响应带 `Cache-Control: no-store`、`X-Request-Id`，不回显上游正文、SQL 或凭据。
 
-常规错误返回 JSON：
+## 路由
 
-```json
-{"code":"VERSION_CONFLICT","message":"门店已被修改，请刷新后重试"}
-```
-
-响应带 `Cache-Control: no-store` 和 `X-Request-Id`。合法且唯一的非 nil UUID 请求标识会沿用，否则服务生成新标识。错误不回显 SQL、凭据、上游正文或任意输入。私有指标鉴权失败是空正文 `401`，不使用业务 JSON 格式。
-
-## 通用输入与 CORS
-
-写入包括 `POST`、`PATCH` 和员工解除关联的 `DELETE`，都必须使用 `Content-Type: application/json`，正文上限 `65536` 字节。正文必须符合对应对象结构，未知字段拒绝。查询拒绝未知或重复键、错误百分号编码及无效 UTF-8。
-
-分页可选 `page` 默认 `1`，范围 `1–1000000`；`size` 默认 `20`，范围 `1–50`。列表总数与记录在同一只读快照中查询。更新及解除关联必须传 JSON 整数 `version`，范围 `1–2147483646`，不能用字符串、小数或浮点字面量代替。
-
-CORS 对请求携带的 Origin 与必填 `STORES_ALLOWED_ORIGINS` 精确匹配。未配置或空配置拒绝启动，`null` 和通配符不属于支持的 origin；生产要求 HTTPS，开发额外允许准确回环 HTTP。没有 Origin 的服务间请求可正常处理。合法预检返回 `204`，允许 `GET, HEAD, POST, PATCH, DELETE, OPTIONS`，请求头仅允许 `Authorization`、`Content-Type`、`X-Request-Id`。非法、opaque `null` 或重复 Origin 返回 `403 ORIGIN_DENIED`，不开放 Cookie credentials。
-
-## 路由清单
-
-| 方法与相对路径 | 所需资源 / 动作 | 成功结果 |
+| 方法与路径 | 资源 / 动作 | 结果 |
 | --- | --- | --- |
-| `GET /health/live` | 公开 | 进程状态 |
-| `GET /health/ready`、`GET /health` | 公开 | 数据库与迁移就绪状态 |
-| `GET /stores` | `store/read` | 门店分页 |
-| `POST /stores` | `store/create` | 新门店记录，201 |
-| `GET /stores/{id}` | `store/read` | 门店记录 |
-| `PATCH /stores/{id}` | `store/update` | 更新后的门店记录 |
-| `GET /stores/{id}/staff` | `store-staff/read` | 有效员工关联分页 |
-| `POST /stores/{id}/staff` | `store-staff/assign` | 新关联记录，201 |
-| `DELETE /stores/{store}/staff/{link}` | `store-staff/unassign` | `{"ok":true}` |
-| `GET /stores/{id}/daily-reports` | `store-daily-report/read` | 日报分页 |
-| `POST /stores/{id}/daily-reports` | `store-daily-report/create` | 新日报，201 |
-| `GET /daily-reports/{id}` | `store-daily-report/read` | 日报记录 |
-| `PATCH /daily-reports/{id}` | `store-daily-report/update` | 更新后的日报 |
-| `GET /daily-reports/summary` | `store-daily-report/read` | 日期范围汇总 |
-| `GET /members` | 指定的成员查找用途 | 成员分页 |
-| `GET /internal/metrics` | 独立运维 Bearer | Prometheus 文本 |
+| `GET /health/live` | 公开 | 进程存活 |
+| `GET /health/ready`、`GET /health` | 公开 | 数据库和迁移就绪 |
+| `GET /organizations`、`GET /organizations/{organizationId}` | query 指定的七种用途之一 | 平台 STORE 目录 / 单项投影 |
+| `GET /stores`、`GET /stores/{id}` | `store/read` | 营业档案分页 / 详情 |
+| `POST /stores` | `store/create` | 为已有 STORE 完善营业资料 |
+| `PATCH /stores/{id}` | `store/update` | 更新营业字段 |
+| `GET /stores/{id}/staff` | `store-staff/read` | 平台当前直接成员分页 |
+| `POST /stores/{id}/staff`、`DELETE /stores/{store}/staff/{link}` | 认证并校验 `store-staff/read` | `410 PLATFORM_MEMBERSHIP_MANAGED` |
+| `GET /members` | `store/create`、`store/update`、`store-staff/read` | 平台直接成员候选 |
+| `GET /stores/{id}/daily-reports`、`GET /daily-reports/{id}` | `store-daily-report/read` | 日报分页 / 详情 |
+| `POST /stores/{id}/daily-reports` | `store-daily-report/create` | 新日报 |
+| `PATCH /daily-reports/{id}` | `store-daily-report/update` | 更新日报金额 / 备注 |
+| `GET /daily-reports/summary` | `store-daily-report/read` | 日期范围内精确汇总 |
+| `GET /internal/metrics` | 独立运维 Bearer | 私网 Prometheus 指标 |
 
-当前没有门店删除、日报删除或批量写入接口。不存在的路由返回 `404 ROUTE_NOT_FOUND`，不支持的方法返回 `405 METHOD_NOT_ALLOWED`。
+本服务不提供组织创建、组织身份修改、成员分配、门店删除或日报删除。旧成员写接口不读取或写入本地关联表，调用方应转到平台组织管理。
 
-## 门店
+## 通用输入
 
-`GET /stores` 接受 `page`、`size`、`q`、`businessStatus`、`organizationId`。`q` 去除两端空白后最多 200 字符，在门店名和联系信息中按字面子串匹配；`%`、`_` 不作为通配符。`organizationId` 只收窄当前授权范围。
+UUID 必须为非 nil、带连字符的标准格式。JSON 写入要求 `Content-Type: application/json`，正文上限 65536 字节，拒绝未知字段。更新必须传 JSON 整数 `version`（1–2147483646）。查询拒绝未知键、重复键、错误百分号编码、NUL 和无效 UTF-8。
 
-创建请求：
+分页默认 `page=1&size=20`，page 为 1–1000000，size 为 1–50。普通分页为 `{"records":[],"total":0,"page":1,"size":20}`。业务列表的 count 和 records 来自同一只读事务快照。
 
-```json
-{"name":"中心店","businessStatus":"OPEN","businessContact":"工作电话或联系人","managerUserId":null}
-```
+CORS 精确匹配必填 `STORES_ALLOWED_ORIGINS`。不支持空配置、`null`、通配符或生产 HTTP。开发额外允许准确回环 HTTP。合法预检返回 204，允许 GET、HEAD、POST、PATCH、DELETE、OPTIONS 及 Authorization、Content-Type、X-Request-Id；不开放 Cookie credentials。没有 Origin 的服务间请求可使用 Bearer。
 
-`name`、`businessStatus`、`businessContact` 必填。名称去除两端空白后非空，名称与联系信息各最多 200 字符；联系信息允许空字符串。状态仅为 `OPEN` 或 `CLOSED`。`managerUserId` 可省略、为 `null` 或有效成员 UUID，显示名由平台查询获得。
+## 平台 STORE 组织目录
 
-创建归属取当前平台组织，owner 为创建人，初始版本为 `1`。每个租户组织只能有一间门店，重复创建返回 `409 STORE_ALREADY_EXISTS`。
+集合请求必须传 `resource`、`action`，可带 `page`、`size`、`q`（去空白前最多 100 字符）。七种用途为 `store/read|create|update`、`store-staff/read`、`store-daily-report/read|create|update`，平台必须配置对应 `organizationLookups` 且类型为 STORE。单项路径只接受 resource/action，不接受分页或搜索。
 
-`PATCH /stores/{id}` 必须包含 `version`，并至少包含 `name`、`businessStatus`、`businessContact`、`managerUserId` 中一项。省略负责人表示保持原值，传 `null` 表示清空。不能修改租户、组织或 owner。负责人关联按 [成员契约](docs/member-contract.md)校验。
+目录页面除普通分页字段外，包含 `contractVersion:"1.0"`、64 位十六进制 `contextVersion`、UTC RFC3339 `expiresAt`。每个组织投影也包含这三项，以及：
 
-记录包含 `id`、`tenantId`、`organizationId`、`ownerUserId`、上述业务字段、`managerDisplayName`、`version`、`createdAt`、`updatedAt`。负责人 ID 和显示名成对为值或 `null`，时间为 UTC ISO 字符串。
-
-## 员工关联
-
-`GET /stores/{id}/staff` 只接受 `page`、`size`，只返回未解除的关联。关联创建请求为 `{"userId":"<成员 UUID>"}`，服务端核验该用户是目标门店组织的有效直接成员。一个员工可以关联多间门店，同一门店重复有效关联返回 `409 STAFF_ALREADY_ASSIGNED`。
-
-员工关联的 owner 为员工本人，`createdByUserId` 为操作人，两者含义独立。记录包含 `id`、`tenantId`、`storeId`、`organizationId`、`ownerUserId`、`userId`、`displayName`、`createdByUserId`、`version`、时间字段和 `removedAt:null`。
-
-解除关联使用 `DELETE /stores/{store}/staff/{link}`，JSON 正文为 `{"version":1}`。成功后关联不再出现在有效列表，返回 `{"ok":true}`。服务执行逻辑解除并保留业务审计。
-
-## 每日营业记录
-
-`GET /stores/{id}/daily-reports` 接受 `page`、`size`、`dateFrom`、`dateTo`。日期为真实的 `YYYY-MM-DD`，筛选范围含两端；同时提供时必须满足起始日不晚于结束日。
-
-创建请求：
-
-```json
-{"businessDate":"2026-10-23","amount":"123.45","note":"当日营业记录"}
-```
-
-`amount` 必填，必须为非负十进制字符串；整数最多 16 位，小数最多 2 位，不接受指数、符号、空白或 JSON 数字。数据库为 `NUMERIC(18,2)`，响应始终使用两位小数字符串。金额可大于 JavaScript 安全整数精度，客户端不能通过 `Number` 往返。
-
-`businessDate` 可省略，此时服务按 Asia/Shanghai 的当前营业日取值；官方前端要求用户确认并发送明确日期，避免请求与恢复跨越午夜时改变目标。日期年份范围 `0001–9999`。`note` 可省略，默认空字符串，最多 8192 字符，不含 NUL。
-
-同店同营业日唯一，重复返回 `409 DAILY_REPORT_EXISTS`。owner 为录入人。`PATCH /daily-reports/{id}` 必须传 `version`，并至少包含 `amount` 或 `note`；营业日、门店与归属不能更改。
-
-日报记录包含 `id`、`tenantId`、`storeId`、`organizationId`、`ownerUserId`、`businessDate`、`amount`、`note`、`version`、`createdAt`、`updatedAt`。
-
-`GET /daily-reports/summary` 必须同时提供 `dateFrom`、`dateTo`，可用 `storeId` 收窄范围，不接受分页字段。响应包含 `count`、`totalAmount`、`dateFrom`、`dateTo` 和 `storeId`。未筛选店时 `storeId` 为 `null`，空范围金额为 `"0.00"`。汇总金额可能超过单份日报上限，仍按精确字符串处理。
-
-## 受控成员目录
-
-`GET /members` 必须指定 `resource` 与 `action`，仅支持 `store/create`、`store/update`、`store-staff/assign`。可选 `organizationId` 默认当前组织，`page`、`size` 使用通用分页；`q` 在去空白前最多 100 字符。
-
-调用者需要对应动作的功能与数据授权，平台需登记相同的 `memberLookups`。目录返回当前租户和允许组织内的有效直接成员，不因 `read` 或 `unassign` 权限开放用户目录。分页记录只含 `id`、`displayName`、`organizationId`；候选结果不会替代后续写入时的成员复核。
-
-## 健康与私有指标
-
-存活返回 `{"status":"ok","service":"stores-api","scope":"process"}`。就绪与兼容 `/health` 返回 scope `business-database-schema`，数据库连接、迁移历史或结构校验失败返回 `503 DATABASE_UNAVAILABLE`。这些接口不证明用户有业务权限。
-
-`/internal/metrics` 使用独立的 `STORES_METRICS_TOKEN` Bearer，未配置或认证不符返回 `401`。成功返回 `text/plain; version=0.0.4`。公开网关应屏蔽整个私有路径，采集端通过受控网络访问 API。
-
-## 错误与恢复
-
-| 状态 / code | 含义和处理 |
+| 字段 | 类型与含义 |
 | --- | --- |
-| `400 VALIDATION_ERROR` | 参数、对象结构、日期、金额或版本不符合协议，修正后再提交 |
-| `401 INVALID_APP_TOKEN`、`INVALID_CONTEXT` | 当前应用身份失效，清除旧视图并等待平台更新 |
-| `403 OPERATION_DENIED`、`DATA_DENIED` | 当前资源动作没有权限或范围，停止该动作并更新授权 |
-| `403 ORIGIN_DENIED` | 配置的 Origin 或预检头不匹配 |
-| `404 RESOURCE_NOT_FOUND` | 记录不存在或对该资源动作不可见，不泄露跨范围存在性 |
-| `404 MEMBER_NOT_FOUND` | 负责人或员工不是当前允许组织中的有效成员 |
-| `409 VERSION_CONFLICT` | 重新读取最新版本，由用户明确采用后再修订 |
-| `409 STORE_ALREADY_EXISTS`、`STAFF_ALREADY_ASSIGNED`、`DAILY_REPORT_EXISTS` | 核对组织门店、有效关联或门店营业日唯一关系 |
-| `413 BODY_TOO_LARGE`、`415 JSON_REQUIRED` | 缩小正文或改用正确 JSON 类型 |
-| `503 PLATFORM_UNAVAILABLE`、`AUTHORIZATION_UNAVAILABLE` | 平台依赖或授权配置不可用，不放行业务 |
-| `503 DATABASE_UNAVAILABLE` | 业务数据库不可用，检查服务和就绪状态 |
-| `503 MEMBER_VALIDATION_EXPIRED` | 成员验证窗口已过，原事务不允许继续提交 |
-| `503 CREATE_RESULT_UNKNOWN`、`WRITE_RESULT_UNKNOWN` | 结果无法确认，先查原业务目标与当前版本 |
+| `id`、`tenantId` | UUID 字符串 |
+| `parentId` | UUID 字符串或 null |
+| `name`、`code`、`path` | 平台当前组织名称、编码和路径字符串 |
+| `organizationType`、`status` | 固定 `STORE`、`ENABLED` |
+| `revision` | 64 位十六进制修订摘要字符串 |
+| `province`、`city`、`district`、`township`、`village`、`address` | 必填字符串，可为空 |
+| `contactName`、`contactPhone`、`contactEmail` | 平台组织联系人字段，必填字符串，可为空 |
 
-当前没有 `Idempotency-Key` 创建重放协议。网络中断、请求超时、取消、无效成功响应或明确结果未知，均不能证明服务端没有提交。保留原始目标和正文，先查询当前组织门店、有效员工关联、原门店营业日或具体记录版本；无读取权限时交由有权限的人员核对。不要自动重发 `POST`、`PATCH` 或 `DELETE`。
+目录用于选择操作目标，SELF 只列出当前组织。组织投影的短期有效窗口约束服务端本次请求，不要求用户在三秒内填完表。提交只发送选中的 organizationId，服务端重新获取组织与权限，不能提交组织名称等投影字段。
 
-成员验证从请求开始使用绝对期限 `min(PLATFORM_AUTH_TIMEOUT_MS, 3000ms)`，包含网络、连接池等待和事务执行。提交前过期回滚；提交后无法确认返回未知结果。平台与业务库之间没有分布式事务，最后一次检查到 COMMIT 仍存在短暂撤销竞态，详见 [成员契约](docs/member-contract.md)。
+## 营业资料
+
+`GET /stores` 接受 page、size、q、businessStatus、organizationId。q 去除两端空白后最多 200 字符，按字面子串搜索实时平台组织名、编码及本地营业联系信息；百分号和下划线不作为 SQL 通配符。
+
+`POST /stores` 示例：
+
+```json
+{"organizationId":"00000000-0000-4000-8000-000000000001","businessStatus":"OPEN","businessContact":"营业电话或说明","managerUserId":null}
+```
+
+organizationId、businessStatus、businessContact 必填。目标必须是当前允许的有效 STORE。businessStatus 仅 OPEN/CLOSED，businessContact 可为空且最多 200 字符。managerUserId 可省略、为 null 或当前有效直接成员 UUID；它是营业联系人，不代表平台组织负责人，也不改变业务 owner。
+
+同一 `(tenantId, organizationId)` 只允许一份营业档案，重复返回 `409 STORE_ALREADY_EXISTS`。owner 为资料初始化人，初始 version 为 1。
+
+`PATCH /stores/{id}` 必须含 version，并至少含 businessStatus、businessContact、managerUserId 一项。省略 manager 表示保留，null 表示显式清空。不能提交 name、code、address、parentId、organizationId、tenantId、ownerUserId 或 managerDisplayName。
+
+每次保存都会复核最终非空营业联系人，即使只改营业状态、未修改联系人。联系人已离职或当前 SELF 范围无法证明子 STORE 联系人时，返回 `404 MEMBER_NOT_FOUND`；用户可显式清空联系人再保存，或切到获授权组织上下文。服务不会自动清空字段，也不会将此情况误判为整个 store:update 撤权。
+
+营业记录返回 id、tenantId、organizationId、ownerUserId、businessStatus、businessContact、managerUserId、managerDisplayName、version、createdAt、updatedAt。另有 `organization` 完整实时平台投影，兼容字段 `name` 始终取 `organization.name`。数据库旧 name 仅保留历史，不作为显示和搜索权威源。平台组织联系人与营业联系人是不同字段。
+
+## 平台门店成员
+
+`GET /stores/{id}/staff?page=1&size=20&q=姓名` 返回当前平台直接成员，记录仅有 `id`、`displayName`、`organizationId`。q 在去空白前最多 100 字符。目标 profile 的租户、组织和当前 staff/read 范围必须有效，查看成员不依赖 profile 创建人。
+
+`GET /members` 必须传 resource/action，可带 organizationId（默认当前组织）、page、size、q；仅支持 store/create、store/update、store-staff/read。平台须登记相同 memberLookups。候选数据不能替代提交时的成员复核。历史 store_staff 行保留查询审计价值，当前接口不再从其推断成员关系。
+
+## 日报与汇总
+
+日报列表接受 page、size、dateFrom、dateTo，日期范围含两端。创建正文：
+
+```json
+{"businessDate":"2026-10-24","amount":"123.45","note":"当日营业记录"}
+```
+
+amount 必填，非负十进制字符串，整数最多 16 位、小数最多 2 位，不接受 JSON 数字、指数、符号或空白。数据库 NUMERIC(18,2)，响应金额固定两位小数，不能通过 JavaScript Number 往返。businessDate 可省略，此时按 Asia/Shanghai 当日取值；前端发送用户确认的明确日期。日期为真实 YYYY-MM-DD，年份 0001–9999。note 默认空，最多 8192 字符。
+
+同店同日唯一，重复为 `409 DAILY_REPORT_EXISTS`。日报 owner 为录入人。更新必须传 version，且至少传 amount 或 note，不允许改门店、营业日或身份。响应保留 id、tenantId、storeId、organizationId、ownerUserId、businessDate、amount、note、version、createdAt、updatedAt。
+
+汇总必须同时传 dateFrom、dateTo，可带 storeId，不接受分页。返回 count、totalAmount、dateFrom、dateTo、storeId；未按店筛选时 storeId 为 null，空金额为 "0.00"。汇总同样排除失效或非 STORE 组织。历史 profile 技术 ID 和报告 storeId 引用不变。
+
+## 失败与恢复
+
+| 状态 / code | 处理 |
+| --- | --- |
+| `400 VALIDATION_ERROR` | 修正结构、字段、编码、金额、日期或版本 |
+| `401 INVALID_APP_TOKEN`、`INVALID_CONTEXT` | 身份失效，清理旧视图并等待平台上下文更新 |
+| `403 OPERATION_DENIED`、`DATA_DENIED` | 当前资源动作或数据范围不允许 |
+| `403 ORIGIN_DENIED` | 核对准确 origin / 预检配置 |
+| `404 RESOURCE_NOT_FOUND` | 业务行或有效 STORE 组织不存在 / 不可见 |
+| `404 MEMBER_NOT_FOUND` | 清空无效营业联系人或使用正确组织上下文 |
+| `409 VERSION_CONFLICT` | 读取最新版本，由用户明确采用后再提交 |
+| `409 STORE_ALREADY_EXISTS`、`DAILY_REPORT_EXISTS` | 查询已存在的组织营业资料或同店同日报 |
+| `410 PLATFORM_MEMBERSHIP_MANAGED` | 到平台组织管理维护成员 |
+| `413 BODY_TOO_LARGE`、`415 JSON_REQUIRED` | 缩小正文或发送正确 JSON |
+| `503 PLATFORM_UNAVAILABLE`、`AUTHORIZATION_UNAVAILABLE` | 平台依赖或配置不可用，请求不放行 |
+| `503 DATABASE_UNAVAILABLE` | 检查业务库和 readiness |
+| `503 ORGANIZATION_VALIDATION_EXPIRED`、`MEMBER_VALIDATION_EXPIRED` | 请求内的短期校验证据到期，不能继续提交 |
+| `503 CREATE_RESULT_UNKNOWN`、`WRITE_RESULT_UNKNOWN` | 先查询原目标和版本，不能自动重发 |
+
+本服务无 Idempotency-Key 重放协议。网络中断、超时、取消、无效成功响应及明确结果未知都不能证明未提交。保留原始 organizationId、profileId、营业日和正文，先核对现有档案 / 日报 / 版本；无读权限时交给有权限人员核对。
+
+组织投影与成员证据使用绝对 `min(PLATFORM_AUTH_TIMEOUT_MS, 3000ms)` 窗口，包含网络、连接池和行锁等待；多个组织取最早到期时间，不能逐页延长。数据库仍按连接池、锁和语句各自的超时预算运行；等待结束后重新核验，过期事务不能继续进入 COMMIT。提交前过期回滚，提交后无法确认返回结果未知。平台与业务库无分布式事务，最后一次复核到 COMMIT 仍有短暂撤销竞态，详见[组织与成员契约](docs/member-contract.md)。

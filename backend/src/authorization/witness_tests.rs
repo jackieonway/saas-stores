@@ -45,7 +45,7 @@ fn member_witness_is_exactly_bound_and_deadline_does_not_renew() {
     };
     witness.assert_fresh(&auth, organization, target).unwrap();
     for changed in [
-        self::auth(Resource::Staff, Action::Assign, user),
+        self::auth(Resource::Staff, Action::Read, user),
         self::auth(Resource::Store, Action::Update, user),
         self::auth(Resource::Store, Action::Create, target),
     ] {
@@ -76,8 +76,7 @@ fn directory_purpose_and_member_wire_are_strict() {
     for (resource, action, allowed) in [
         (Resource::Store, Action::Create, true),
         (Resource::Store, Action::Update, true),
-        (Resource::Staff, Action::Assign, true),
-        (Resource::Staff, Action::Unassign, false),
+        (Resource::Staff, Action::Read, true),
         (Resource::Store, Action::Read, false),
         (Resource::DailyReport, Action::Create, false),
     ] {

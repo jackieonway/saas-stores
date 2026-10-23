@@ -10,6 +10,7 @@ coverage/
 *.key
 
 # Independent frontend/backend build outputs and private configuration
+/.integration/
 **/node_modules/
 **/target/
 **/dist/

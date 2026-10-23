@@ -1,5 +1,6 @@
 //! Fresh, bounded platform authorization for the independent stores service.
 mod client;
+mod organizations;
 mod policy;
 
 use std::{
@@ -17,6 +18,7 @@ use crate::{
     Config,
 };
 
+pub(crate) use organizations::{organization_query, OrganizationSet};
 pub(crate) use policy::{Action, Authorized, Resource, Scope};
 
 #[derive(Clone)]

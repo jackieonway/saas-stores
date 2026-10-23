@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { can, canMemberLookup, canRoute, routeView, identityKey, validContext,
+import { can, canMemberLookup, canOrganizationLookup, canRoute, routeView, identityKey, validContext,
   validUUID, validBusinessDate, validAmount, normalizeAmount, shanghaiToday } from '../src/domain.ts'
 import { context, grantContext, operations, baseRow, id, user, tenant, organization, child, outside, staff } from './domain.fixture.mjs'
 
@@ -9,7 +9,7 @@ test('SDK 2 contexts remain valid and legacy SDK contexts are rejected', () => {
   assert.equal(validContext({ ...context(), sdkVersion: '1.0.0' }), false)
 })
 
-test('all nine exact operation pairs require their own permission and a unique identity-bound grant', () => {
+test('all seven active operation pairs require their own permission and a unique identity-bound grant', () => {
   for (const operation of operations) {
     const props = grantContext(operation)
     assert.equal(can(props, operation, baseRow), true)
@@ -21,7 +21,7 @@ test('all nine exact operation pairs require their own permission and a unique i
     }
     for (const other of operations.filter(item => item.resource !== operation.resource || item.action !== operation.action)) assert.equal(can(props, other), false)
   }
-  for (const bad of [{ resource: 'store', action: 'delete' }, { resource: 'store-daily-report', action: 'summary' }, { resource: 'store-staff', action: 'update' }]) assert.equal(can(context(), bad), false)
+  for (const bad of [{ resource: 'store', action: 'delete' }, { resource: 'store-daily-report', action: 'summary' }, { resource: 'store-staff', action: 'update' }, { resource: 'store-staff', action: 'assign' }, { resource: 'store-staff', action: 'unassign' }]) assert.equal(can(context(), bad), false)
 })
 
 test('the organization ceiling intersects every scope; missing ceiling means current organization only', () => {
@@ -40,22 +40,19 @@ test('the organization ceiling intersects every scope; missing ceiling means cur
   assert.equal(can({ ...subtree, organizationScopeIds: [organization] }, operation, { ...baseRow, organizationId: child }), false)
 })
 
-test('SELF follows each actual resource owner, not manager or staff creator', () => {
+test('SELF follows actual business resource owner, not the business contact', () => {
   for (const operation of [{ resource: 'store', action: 'update' }, { resource: 'store-daily-report', action: 'read' }]) {
     const props = grantContext(operation, 'SELF')
     assert.equal(can(props, operation, baseRow), true)
     assert.equal(can(props, operation, { ...baseRow, ownerUserId: outside, managerUserId: user }), false)
   }
-  const operation = { resource: 'store-staff', action: 'unassign' }, props = grantContext(operation, 'SELF')
-  assert.equal(staff.createdByUserId, user)
-  assert.equal(can(props, operation, staff), false)
-  assert.equal(can(props, operation, { ...staff, ownerUserId: user, userId: user, createdByUserId: outside }), true)
+  const operation = { resource: 'store', action: 'read' }, props = grantContext(operation, 'SELF')
   const restricted = { ...props, dataGrants: [{ ...props.dataGrants[0], organizationIds: [organization] }] }
   assert.equal(can(restricted, operation, { ...baseRow, organizationId: child }), false)
 })
 
-test('member lookup has exactly three purposes and independently limits target organization', () => {
-  const purposes = [{ resource: 'store', action: 'create' }, { resource: 'store', action: 'update' }, { resource: 'store-staff', action: 'assign' }]
+test('business-contact member lookup has exactly two purposes and independently limits target organization', () => {
+  const purposes = [{ resource: 'store', action: 'create' }, { resource: 'store', action: 'update' }]
   for (const purpose of purposes) {
     for (const scope of ['SELF', 'ORG', 'ORG_SUBTREE', 'TENANT']) {
       const props = grantContext(purpose, scope)
@@ -72,7 +69,7 @@ test('frozen MENU routes authorize independently; BUTTON, missing MENU and unkno
   const paths = [
     ['/micro/stores', 'stores'], ['/micro/stores/store-create', 'store-create'],
     ['/micro/stores/stores/' + id(10), 'store-detail'], ['/micro/stores/staff', 'staff'],
-    ['/micro/stores/staff-assign', 'staff-assign'], ['/micro/stores/reports', 'reports'],
+    ['/micro/stores/reports', 'reports'],
     ['/micro/stores/daily-report-create', 'report-create'], ['/micro/stores/daily-reports/' + id(12), 'report-detail'],
   ]
   for (const [path, kind] of paths) {
@@ -87,6 +84,24 @@ test('frozen MENU routes authorize independently; BUTTON, missing MENU and unkno
   assert.equal(canRoute({ ...props, menus: [{ ...props.menus[0], type: 'DIR', children: [props.menus[2]] }] }, '/micro/stores/store-create'), true)
   for (const path of ['/elsewhere', '/micro/stores/missing', '/micro/stores/stores/store-create', '/micro/stores/stores/:id', '/micro/stores/daily-report-create/extra', '/micro/stores/daily-reports/summary']) {
     assert.deepEqual(routeView(path), { kind: 'not-found' }); assert.equal(canRoute(props, path), false)
+  }
+})
+
+test('retired staff deep links show static platform guidance without requiring obsolete write permissions', () => {
+  for (const path of ['/micro/stores/staff-assign', '/micro/stores/staff-unassign']) {
+    assert.equal(routeView(path).kind, 'platform-membership')
+    assert.equal(canRoute(context({ permissions: [], dataGrants: [], menus: [] }), path), true)
+    assert.equal(canRoute(null, path), false)
+  }
+})
+
+test('STORE directory scope permits HQ subtree selection and confines SELF creation to current organization', () => {
+  const purpose = { resource: 'store', action: 'create' }
+  for (const scope of ['SELF', 'ORG', 'ORG_SUBTREE', 'TENANT']) {
+    const props = grantContext(purpose, scope)
+    assert.equal(canOrganizationLookup(props, purpose, organization), true)
+    assert.equal(canOrganizationLookup(props, purpose, child), ['ORG_SUBTREE', 'TENANT'].includes(scope))
+    assert.equal(canOrganizationLookup(props, purpose, outside), false)
   }
 })
 

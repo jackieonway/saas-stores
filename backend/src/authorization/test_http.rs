@@ -154,7 +154,12 @@ impl Drop for NodePeer {
         let _ = self.child.kill();
         let _ = self.child.wait();
         if let Some(reader) = self.reader.take() {
-            reader.join().expect("Node HTTP fixture reader");
+            let result = reader.join();
+            // Preserve the original test failure and let its owned-database
+            // guard clean up instead of aborting on a second unwind in Drop.
+            if !thread::panicking() {
+                result.expect("Node HTTP fixture reader");
+            }
         }
     }
 }

@@ -84,8 +84,6 @@ fn exact_resource_action_permission_and_single_identity_bound_grant_are_required
         (Resource::Store, Action::Create),
         (Resource::Store, Action::Update),
         (Resource::Staff, Action::Read),
-        (Resource::Staff, Action::Assign),
-        (Resource::Staff, Action::Unassign),
         (Resource::DailyReport, Action::Read),
         (Resource::DailyReport, Action::Create),
         (Resource::DailyReport, Action::Update),

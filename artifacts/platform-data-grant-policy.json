@@ -44,26 +44,6 @@
           ]
         },
         {
-          "resource": "store-staff",
-          "action": "assign",
-          "scopes": [
-            "SELF",
-            "ORG",
-            "ORG_SUBTREE",
-            "TENANT"
-          ]
-        },
-        {
-          "resource": "store-staff",
-          "action": "unassign",
-          "scopes": [
-            "SELF",
-            "ORG",
-            "ORG_SUBTREE",
-            "TENANT"
-          ]
-        },
-        {
           "resource": "store-daily-report",
           "action": "read",
           "scopes": [
@@ -105,7 +85,44 @@
         },
         {
           "resource": "store-staff",
-          "action": "assign"
+          "action": "read"
+        }
+      ],
+      "organizationLookups": [
+        {
+          "resource": "store",
+          "action": "read",
+          "organizationType": "STORE"
+        },
+        {
+          "resource": "store",
+          "action": "create",
+          "organizationType": "STORE"
+        },
+        {
+          "resource": "store",
+          "action": "update",
+          "organizationType": "STORE"
+        },
+        {
+          "resource": "store-staff",
+          "action": "read",
+          "organizationType": "STORE"
+        },
+        {
+          "resource": "store-daily-report",
+          "action": "read",
+          "organizationType": "STORE"
+        },
+        {
+          "resource": "store-daily-report",
+          "action": "create",
+          "organizationType": "STORE"
+        },
+        {
+          "resource": "store-daily-report",
+          "action": "update",
+          "organizationType": "STORE"
         }
       ]
     }

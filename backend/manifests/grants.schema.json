@@ -29,8 +29,6 @@
         "store:create",
         "store:update",
         "store-staff:read",
-        "store-staff:assign",
-        "store-staff:unassign",
         "store-daily-report:read",
         "store-daily-report:detail",
         "store-daily-report:create",
@@ -50,12 +48,6 @@
           "$ref": "#/$defs/uuid"
         },
         "store-staff:read": {
-          "$ref": "#/$defs/uuid"
-        },
-        "store-staff:assign": {
-          "$ref": "#/$defs/uuid"
-        },
-        "store-staff:unassign": {
           "$ref": "#/$defs/uuid"
         },
         "store-daily-report:read": {
@@ -112,8 +104,6 @@
                 "store:create",
                 "store:update",
                 "store-staff:read",
-                "store-staff:assign",
-                "store-staff:unassign",
                 "store-daily-report:read",
                 "store-daily-report:create",
                 "store-daily-report:update"
@@ -143,9 +133,7 @@
                   "enum": [
                     "read",
                     "create",
-                    "update",
-                    "assign",
-                    "unassign"
+                    "update"
                   ]
                 },
                 "scope": {
@@ -179,9 +167,7 @@
                     },
                     "action": {
                       "enum": [
-                        "read",
-                        "assign",
-                        "unassign"
+                        "read"
                       ]
                     }
                   }

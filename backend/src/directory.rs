@@ -1,11 +1,12 @@
-//! A narrow proxy for the three registered member-association purposes.
-use std::collections::BTreeSet;
+//! A narrow proxy for manager selection and current direct platform members.
+use std::collections::BTreeMap;
 
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
     authorization::{Action, Resource},
+    domain,
     error::ApiError,
     http::Call,
 };
@@ -17,6 +18,31 @@ struct Query {
     page: u32,
     size: u32,
     q: String,
+}
+
+pub(crate) struct MemberSearch {
+    pub page: u32,
+    pub size: u32,
+    pub q: String,
+}
+
+/// Shared with the read-only store-member view, including validation before
+/// trimming so padding cannot bypass the platform's search budget.
+pub(crate) fn member_search(raw: Option<&str>) -> Result<MemberSearch, ApiError> {
+    search_fields(&domain::query(raw, &["page", "size", "q"])?)
+}
+
+fn search_fields(fields: &BTreeMap<String, String>) -> Result<MemberSearch, ApiError> {
+    let (page, size) = domain::pagination(fields)?;
+    let q = fields.get("q").map(String::as_str).unwrap_or_default();
+    if q.chars().count() > 100 {
+        return Err(ApiError::validation());
+    }
+    Ok(MemberSearch {
+        page,
+        size,
+        q: trim(q).to_owned(),
+    })
 }
 
 /// Let the HTTP adapter authorize the exact requested operation before it
@@ -34,6 +60,9 @@ pub(crate) async fn list(call: &Call<'_>, raw: Option<&str>) -> Result<Value, Ap
     let organization = query
         .organization
         .unwrap_or_else(|| call.auth.organization_id());
+    call.auth.assert_fresh()?;
+    call.organizations.get(organization)?;
+    call.auth.require_organization(organization)?;
     call.authorizer
         .members(
             call.auth,
@@ -47,106 +76,37 @@ pub(crate) async fn list(call: &Call<'_>, raw: Option<&str>) -> Result<Value, Ap
         .await
 }
 
-fn decode(raw: &str) -> Result<String, ApiError> {
-    let mut output = Vec::with_capacity(raw.len());
-    let bytes = raw.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'+' => output.push(b' '),
-            b'%' => {
-                let pair = bytes
-                    .get(index + 1..index + 3)
-                    .ok_or_else(ApiError::validation)?;
-                let high = (pair[0] as char)
-                    .to_digit(16)
-                    .ok_or_else(ApiError::validation)?;
-                let low = (pair[1] as char)
-                    .to_digit(16)
-                    .ok_or_else(ApiError::validation)?;
-                output.push((high * 16 + low) as u8);
-                index += 2;
-            }
-            byte => output.push(byte),
-        }
-        index += 1;
-    }
-    let result = String::from_utf8(output).map_err(|_| ApiError::validation())?;
-    if result.contains('\0') {
-        return Err(ApiError::validation());
-    }
-    Ok(result)
-}
-fn positive(raw: &str, max: u32) -> Result<u32, ApiError> {
-    if raw.is_empty() || !raw.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(ApiError::validation());
-    }
-    raw.parse::<u32>()
-        .ok()
-        .filter(|n| (1..=max).contains(n))
-        .ok_or_else(ApiError::validation)
-}
-fn uuid(raw: &str) -> Result<Uuid, ApiError> {
-    if raw.len() != 36 {
-        return Err(ApiError::validation());
-    }
-    let id = Uuid::parse_str(raw).map_err(|_| ApiError::validation())?;
-    if id.is_nil() || !id.hyphenated().to_string().eq_ignore_ascii_case(raw) {
-        return Err(ApiError::validation());
-    }
-    Ok(id)
-}
 fn trim(raw: &str) -> &str {
     raw.trim_matches(|ch|matches!(ch,'\u{0009}'..='\u{000d}'|'\u{0020}'|'\u{00a0}'|'\u{1680}'|'\u{2000}'..='\u{200a}'|'\u{2028}'|'\u{2029}'|'\u{202f}'|'\u{205f}'|'\u{3000}'|'\u{feff}'))
 }
 fn parse(raw: Option<&str>) -> Result<Query, ApiError> {
-    let raw = raw.unwrap_or_default();
-    if raw.len() > 8192 {
-        return Err(ApiError::validation());
-    }
-    let mut resource = None;
-    let mut action = None;
-    let mut organization = None;
-    let mut page = 1;
-    let mut size = 20;
-    let mut q = String::new();
-    let mut seen = BTreeSet::new();
-    for part in raw.split('&').filter(|part| !part.is_empty()) {
-        let (key, value) = part.split_once('=').unwrap_or((part, ""));
-        let key = decode(key)?;
-        let value = decode(value)?;
-        if !seen.insert(key.clone()) {
-            return Err(ApiError::validation());
-        }
-        match key.as_str() {
-            "resource" => {
-                resource = Some(Resource::parse(&value).ok_or_else(ApiError::validation)?)
-            }
-            "action" => action = Some(Action::parse(&value).ok_or_else(ApiError::validation)?),
-            "organizationId" => organization = Some(uuid(&value)?),
-            "page" => page = positive(&value, 1_000_000)?,
-            "size" => size = positive(&value, 50)?,
-            "q" => {
-                if value.chars().count() > 100 {
-                    return Err(ApiError::validation());
-                }
-                q = trim(&value).to_owned();
-            }
-            _ => return Err(ApiError::validation()),
-        }
-    }
-    let resource = resource.ok_or_else(ApiError::validation)?;
-    let action = action.ok_or_else(ApiError::validation)?;
+    let fields = domain::query(
+        raw,
+        &["resource", "action", "organizationId", "page", "size", "q"],
+    )?;
+    let resource = fields
+        .get("resource")
+        .and_then(|value| Resource::parse(value))
+        .ok_or_else(ApiError::validation)?;
+    let action = fields
+        .get("action")
+        .and_then(|value| Action::parse(value))
+        .ok_or_else(ApiError::validation)?;
     if !resource.member_lookup(action) {
         return Err(ApiError::validation());
     }
+    let organization = fields
+        .get("organizationId")
+        .map(|value| domain::uuid(value))
+        .transpose()?;
+    let search = search_fields(&fields)?;
     Ok(Query {
         resource,
         action,
         organization,
-        page,
-        size,
-        q,
+        page: search.page,
+        size: search.size,
+        q: search.q,
     })
 }
 
@@ -168,9 +128,9 @@ mod tests {
                 Action::Update,
             ),
             (
-                "resource=store-staff&action=assign",
+                "resource=store-staff&action=read",
                 Resource::Staff,
-                Action::Assign,
+                Action::Read,
             ),
         ] {
             assert_eq!(purpose(Some(raw)).unwrap(), (resource, action));
@@ -182,6 +142,7 @@ mod tests {
             "resource=ticket&action=create",
             "resource=store&action=read",
             "resource=store-staff&action=create",
+            "resource=store-staff&action=assign",
             "resource=store-staff&action=unassign",
             "resource=store-daily-report&action=create",
             "resource=store&action=create&resource=store",
@@ -201,7 +162,7 @@ mod tests {
     #[test]
     fn pagination_and_search_bounds_are_checked_before_trim() {
         let query = parse(Some(
-            "resource=store-staff&action=assign&page=1000000&size=50&q=%25_%5C",
+            "resource=store-staff&action=read&page=1000000&size=50&q=%25_%5C",
         ))
         .unwrap();
         assert_eq!(
@@ -228,5 +189,37 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(query.q, "hi");
+    }
+
+    #[test]
+    fn store_member_search_rejects_authority_fields_and_ambiguous_pagination() {
+        let defaults = member_search(None).unwrap();
+        assert_eq!(
+            (defaults.page, defaults.size, defaults.q.as_str()),
+            (1, 20, "")
+        );
+        let search = member_search(Some("page=2&size=50&q=+%E6%9D%8E+%E5%9B%9B+")).unwrap();
+        assert_eq!(
+            (search.page, search.size, search.q.as_str()),
+            (2, 50, "李 四")
+        );
+        for raw in [
+            "page=1&page=2",
+            "page=1&%70age=2",
+            "page=0",
+            "size=51",
+            "q=%FF",
+            "q=%00",
+            "q=%",
+            "resource=store-staff",
+            "action=assign",
+            "organizationId=11111111-1111-4111-8111-111111111111",
+            "tenantId=11111111-1111-4111-8111-111111111111",
+            "ownerUserId=11111111-1111-4111-8111-111111111111",
+        ] {
+            assert!(member_search(Some(raw)).is_err(), "{raw}");
+        }
+        assert!(member_search(Some(&format!("q={}", "😀".repeat(100)))).is_ok());
+        assert!(member_search(Some(&format!("q=+{}+", "x".repeat(99)))).is_err());
     }
 }
