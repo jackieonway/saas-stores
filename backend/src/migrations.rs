@@ -1,6 +1,6 @@
 //! Embedded SQLx migrations and readiness verification for the independent database.
 
-use sqlx::{Connection, PgPool};
+use sqlx::{Connection, PgConnection, PgPool};
 
 use crate::error::{ServiceError, ServiceFailure};
 
@@ -37,10 +37,15 @@ pub(crate) async fn initialize(pool: &PgPool) -> Result<(), ServiceError> {
 }
 
 pub(crate) async fn verify(pool: &PgPool) -> Result<(), ServiceError> {
+    let mut connection = pool.acquire().await.map_err(failed)?;
+    verify_connection(&mut connection).await
+}
+
+pub(crate) async fn verify_connection(connection: &mut PgConnection) -> Result<(), ServiceError> {
     let applied: Vec<(i64, bool, Vec<u8>)> = sqlx::query_as(
         "SELECT version,success,checksum FROM public._sqlx_migrations ORDER BY version",
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *connection)
     .await
     .map_err(failed)?;
     let expected: Vec<_> = MIGRATOR
@@ -61,10 +66,10 @@ pub(crate) async fn verify(pool: &PgPool) -> Result<(), ServiceError> {
             "business migration history mismatch",
         )));
     }
-    // V1 remains an immutable historical baseline. V2 records its value during
-    // the verified upgrade and checks the current catalog with the v2 function.
-    let verified: bool = sqlx::query_scalar("SELECT count(*)=1 AND COALESCE(bool_and(v2.fingerprint=public.stores_schema_fingerprint_v2() AND v2.legacy_fingerprint=v1.fingerprint),false) FROM public._stores_schema_contract_v2 AS v2 JOIN public._stores_schema_contract AS v1 ON v2.singleton=v1.singleton WHERE v2.singleton")
-        .fetch_one(pool).await.map_err(failed)?;
+    // Each owner migration preserves the earlier snapshots and establishes its
+    // own verified contract. Never overwrite v1/v2 to bless a changed catalog.
+    let verified: bool = sqlx::query_scalar("SELECT count(*)=1 AND COALESCE(bool_and(v3.fingerprint=public.stores_schema_fingerprint_v3() AND v3.legacy_fingerprint=v2.fingerprint AND v2.legacy_fingerprint=v1.fingerprint),false) FROM public._stores_schema_contract_v3 AS v3 JOIN public._stores_schema_contract_v2 AS v2 USING(singleton) JOIN public._stores_schema_contract AS v1 USING(singleton) WHERE v3.singleton")
+        .fetch_one(&mut *connection).await.map_err(failed)?;
     if !verified {
         return Err(failed(std::io::Error::other(
             "business schema contract mismatch",

@@ -53,7 +53,7 @@ UMD 全局名称是 `StoresMicroApp`。对 qiankun 导出的四个方法如下�
 | `update(props)` | 更新身份、组织、权限、主题和 `routePath` |
 | `unmount()` | 取消请求、释放控制器、销毁 React root；支持后续重新挂载 |
 
-宿主传入 `container` 和 `platform`；`platform` 是 SDK `2.0.0` 的 `MicroProps`，契约版本 `2.0`。只有该嵌套对象进入业务 SDK，qiankun 的 `name`、`container`、`services` 不进入严格的上下文结构。容器内必须包含 `[data-stores-mount]`。
+宿主传入 `container` 和 `platform`；`platform` 是 SDK `3.0.0` 的 `MicroProps`，契约版本 `2.0`。只有该嵌套对象进入业务 SDK，qiankun 的 `name`、`container`、`services` 不进入严格的上下文结构。容器内必须包含 `[data-stores-mount]`。
 
 `bootstrap.sdkContract` 是不可写、不可配置的冻结对象，直接引用随 UMD 打包的 SDK 版本与 `assertSupportedSdkVersion`。它仅提供公开版本信息和版本协商，不包含身份、令牌或凭据，不增加 UMD 顶层导出。
 
@@ -90,4 +90,4 @@ npm run preview
 
 每次发布使用新版本 URL；HTML 重新校验，版本资源可以长期缓存，缺失资源必须返回真实 `404`。当前源码构建不会改写 `artifacts` 内的历史 iframe 发布。新发布、平台登记和回退规则见 [部署指南](../backend/docs/deployment.md)，本机演练见 [独立网关](deploy/local/README.md)。写入冲突和结果未知的处理见 [API 契约](../backend/API.md)。
 
-`verify:release` 需要目录和显式版本，检查运行时 / SDK / 契约、HTML 与清单中的相对资源，以及实际 UMD 的四个生命周期导出。HTML 使用固定版本的 parse5 解析大小写、引号和实体，拒绝所有 ESM type 形式；实际 UMD 必须携带只读冻结的 `bootstrap.sdkContract`，接受 SDK `2.0.0` 并拒绝旧版本及未知版本。元数据写着 SDK 2 的无 SDK 空壳也不能通过。门禁验证兼容性，不提供签名或供应链真实性证明。本机 `release:local` 使用同一构建器生成并验证未激活候选，拒绝覆盖已有版本；CI 保存通过该门禁的完整静态产物。
+`verify:release` 需要目录和显式版本，检查运行时 / SDK / 契约、HTML 与清单中的相对资源，以及实际 UMD 的四个生命周期导出。HTML 使用固定版本的 parse5 解析大小写、引号和实体，拒绝所有 ESM type 形式；实际 UMD 必须携带只读冻结的 `bootstrap.sdkContract`，接受 SDK `3.0.0` 并拒绝旧版本及未知版本。元数据写着 SDK 3 的无 SDK 空壳也不能通过。门禁验证兼容性，不提供签名或供应链真实性证明。本机 `release:local` 使用同一构建器生成并验证未激活候选，拒绝覆盖已有版本；CI 保存通过该门禁的完整静态产物。

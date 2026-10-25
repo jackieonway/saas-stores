@@ -1,4 +1,4 @@
-export const id = number => 'a0000000-0000-4000-8000-' + number.toString(16).padStart(12, '0')
+export const id = number => '0199fe00-0000-7000-8000-' + number.toString(16).padStart(12, '0')
 export const tenant = id(1), organization = id(2), user = id(3), child = id(4), outside = id(5)
 export const storeId = id(10), staffId = id(11), reportId = id(12), memberId = id(13)
 export const operations = [
@@ -15,7 +15,7 @@ export const menuDefinitions = [
 ]
 export function context(overrides = {}) {
   return {
-    sdkVersion: '2.0.0', contractVersion: '2.0', appCode: 'stores', basePath: '/micro/stores',
+    sdkVersion: '3.0.0', contractVersion: '2.0', appCode: 'stores', basePath: '/micro/stores',
     contextVersion: 'a'.repeat(64), contextEpoch: 1, routePath: '/micro/stores',
     token: 'test-app-bearer', expiresAt: new Date(Date.now() + 60000).toISOString(),
     tokenExpiresAt: new Date(Date.now() + 120000).toISOString(),

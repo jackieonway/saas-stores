@@ -6,7 +6,7 @@ use sqlx::{
 };
 use url::Url;
 
-use crate::error::ConfigError;
+use crate::{error::ConfigError, imported_database::DatabaseInitialization};
 
 /// Validated, environment-only configuration for the independent business process.
 ///
@@ -30,6 +30,7 @@ use crate::error::ConfigError;
 pub struct Config {
     pub(crate) metrics_token: Option<String>,
     pub(crate) database: PgConnectOptions,
+    pub(crate) database_initialization: DatabaseInitialization,
     pub(crate) bind: std::net::SocketAddr,
     pub(crate) acquire_timeout: Duration,
     pub(crate) statement_timeout: Duration,
@@ -68,6 +69,16 @@ impl Config {
     /// Load the current process environment, without automatic `.env` loading.
     /// Returns a sanitized error when any required value or bound is invalid.
     pub fn from_env() -> Result<Self, ConfigError> {
+        for (name, error) in [
+            ("STORES_DATABASE_INIT_MODE", ConfigError::DatabaseInitMode),
+            ("STORES_EXPECTED_DATABASE", ConfigError::ImportReceipt),
+            ("STORES_IMPORT_MARKER", ConfigError::ImportReceipt),
+            ("STORES_EXPECTED_SCHEMA_SHA256", ConfigError::ImportReceipt),
+        ] {
+            if matches!(std::env::var(name), Err(std::env::VarError::NotUnicode(_))) {
+                return Err(error);
+            }
+        }
         Self::from_lookup(|key| std::env::var(key).ok())
     }
 
@@ -88,10 +99,11 @@ impl Config {
 
     /// Validate values supplied by a lookup without reading files or mutating the
     /// process environment. Only `STORES_DATABASE_URL` supplies database identity.
-    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
+    fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
         let production = get("NODE_ENV").as_deref() == Some("production");
-        let database =
-            database_options(&get("STORES_DATABASE_URL").ok_or(ConfigError::DatabaseUrl)?)?;
+        let database_url = get("STORES_DATABASE_URL").ok_or(ConfigError::DatabaseUrl)?;
+        let database_initialization = DatabaseInitialization::from_lookup(&get, &database_url)?;
+        let database = database_options(&database_url)?;
         let host = get("STORES_HOST").unwrap_or_else(|| "0.0.0.0".into());
         // Binding numeric IPs avoids an unbounded DNS lookup during startup.
         let host: IpAddr = host.trim().parse().map_err(|_| ConfigError::Host)?;
@@ -124,6 +136,7 @@ impl Config {
         Ok(Self {
             metrics_token,
             database,
+            database_initialization,
             bind: (host, port as u16).into(),
             acquire_timeout: millis("STORES_DB_ACQUIRE_TIMEOUT_MS", 5000, 100, 30000)?,
             statement_timeout: millis("STORES_DB_STATEMENT_TIMEOUT_MS", 5000, 100, 30000)?,
@@ -323,6 +336,121 @@ mod tests {
             .chain(extra.iter().copied()),
         )
     }
+
+    const IMPORT_MARKER: &str = "saas-uuid-import/1/019a1158-67b0-7cce-83d2-123456789abc/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const SCHEMA_SHA256: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    #[test]
+    fn initialization_defaults_to_existing_behavior_and_import_is_never_an_api_mode() {
+        for extra in [vec![], vec![("STORES_DATABASE_INIT_MODE", "seed")]] {
+            assert!(matches!(
+                config(&extra).unwrap().database_initialization,
+                DatabaseInitialization::Initialize
+            ));
+        }
+        for mode in ["import", "", " seed", "imported ", "unknown-private-mode"] {
+            assert_eq!(
+                config(&[("STORES_DATABASE_INIT_MODE", mode)]).unwrap_err(),
+                ConfigError::DatabaseInitMode
+            );
+        }
+    }
+
+    #[test]
+    fn receipt_fields_are_required_in_imported_mode_and_forbidden_even_when_empty_otherwise() {
+        let receipt = [
+            ("STORES_EXPECTED_DATABASE", "stores"),
+            ("STORES_IMPORT_MARKER", IMPORT_MARKER),
+            ("STORES_EXPECTED_SCHEMA_SHA256", SCHEMA_SHA256),
+        ];
+        for mode in [None, Some("seed")] {
+            for (name, value) in receipt {
+                for supplied in [value, ""] {
+                    let mut extra = vec![(name, supplied)];
+                    if let Some(mode) = mode {
+                        extra.push(("STORES_DATABASE_INIT_MODE", mode));
+                    }
+                    assert_eq!(config(&extra).unwrap_err(), ConfigError::ImportReceipt);
+                }
+            }
+        }
+        for absent in 0..receipt.len() {
+            let mut extra = vec![("STORES_DATABASE_INIT_MODE", "imported")];
+            extra.extend(
+                receipt
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, pair)| (index != absent).then_some(*pair)),
+            );
+            assert_eq!(config(&extra).unwrap_err(), ConfigError::ImportReceipt);
+        }
+        let complete: Vec<_> = [("STORES_DATABASE_INIT_MODE", "imported")]
+            .into_iter()
+            .chain(receipt)
+            .collect();
+        assert!(matches!(
+            config(&complete).unwrap().database_initialization,
+            DatabaseInitialization::Imported(_)
+        ));
+        for (name, invalid) in [
+            ("STORES_EXPECTED_DATABASE", ""),
+            ("STORES_EXPECTED_DATABASE", "Stores"),
+            ("STORES_EXPECTED_DATABASE", "stores\n"),
+            ("STORES_IMPORT_MARKER", ""),
+            ("STORES_IMPORT_MARKER", "private-invalid-marker"),
+            ("STORES_EXPECTED_SCHEMA_SHA256", ""),
+            (
+                "STORES_EXPECTED_SCHEMA_SHA256",
+                "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            ),
+        ] {
+            let mut rejected = complete.clone();
+            rejected.push((name, invalid));
+            assert_eq!(config(&rejected).unwrap_err(), ConfigError::ImportReceipt);
+        }
+    }
+
+    #[test]
+    fn imported_database_identity_uses_exact_decoded_url_components_and_stays_redacted() {
+        let fields = [
+            ("STORES_DATABASE_INIT_MODE", "imported"),
+            (
+                "STORES_DATABASE_URL",
+                "postgresql://private%20runtime:TOP_SECRET@127.0.0.1/private%20database",
+            ),
+            ("STORES_EXPECTED_DATABASE", "private database"),
+            ("STORES_IMPORT_MARKER", IMPORT_MARKER),
+            ("STORES_EXPECTED_SCHEMA_SHA256", SCHEMA_SHA256),
+        ];
+        let cfg = config(&fields).unwrap();
+        assert_eq!(cfg.database.get_database(), Some("private database"));
+        assert_eq!(cfg.database.get_username(), "private runtime");
+        for private in [
+            "private database",
+            "private runtime",
+            IMPORT_MARKER,
+            SCHEMA_SHA256,
+        ] {
+            assert!(!format!("{cfg:?}").contains(private));
+        }
+        for url in [
+            "postgresql://private%0Aruntime@127.0.0.1/private%20database",
+            "postgresql://private%FFruntime@127.0.0.1/private%20database",
+            "postgresql://private%runtime@127.0.0.1/private%20database",
+            "postgresql://private-runtime@127.0.0.1/private%0Adatabase",
+            "postgresql://private-runtime@127.0.0.1/private%FFdatabase",
+            "postgresql://private-runtime@127.0.0.1/private\tdatabase",
+        ] {
+            let mut rejected = fields.to_vec();
+            rejected.push(("STORES_DATABASE_URL", url));
+            let error = config(&rejected).unwrap_err();
+            assert!(!format!("{error} {error:?}").contains("private"));
+        }
+        let mut mismatch = fields.to_vec();
+        mismatch.push(("STORES_EXPECTED_DATABASE", "private%20database"));
+        assert_eq!(config(&mismatch).unwrap_err(), ConfigError::ImportReceipt);
+    }
+
     #[test]
     fn private_metrics_are_opt_in_bounded_independent_and_redacted() {
         assert!(config(&[]).unwrap().metrics_token.is_none());

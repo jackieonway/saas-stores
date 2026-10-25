@@ -354,7 +354,7 @@ async fn audit(
     let result = sqlx::query("INSERT INTO public.store_audit_events \
         (id,tenant_id,organization_id,actor_user_id,resource_code,action_code,entity_id,request_id) \
         VALUES($1,$2,$3,$4,'store',$5,$6,$7)")
-        .bind(Uuid::new_v4()).bind(call.auth.tenant_id()).bind(organization)
+        .bind(crate::domain::new_id()).bind(call.auth.tenant_id()).bind(organization)
         .bind(call.auth.user_id()).bind(action).bind(entity).bind(request)
         .execute(connection).await.map_err(database_error)?;
     if result.rows_affected() != 1 {
@@ -453,7 +453,7 @@ pub(crate) async fn create(call: &Call<'_>, body: Value) -> Result<Value, ApiErr
         .await
         .map_err(database_error)?;
     assert_fresh()?;
-    let id = Uuid::new_v4();
+    let id = crate::domain::new_id();
     let mut insert = QueryBuilder::<Postgres>::new(
         "INSERT INTO public.stores (id,tenant_id,organization_id,owner_user_id,name,business_status,business_contact,manager_user_id,manager_display_name,version) SELECT ",
     );
@@ -587,13 +587,13 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    const USER: &str = "8c35987c-d35a-43fd-9d0b-54ba6bf09801";
+    const USER: &str = "8c35987c-d35a-73fd-9d0b-54ba6bf09801";
 
     #[test]
     fn locked_store_must_retain_the_exact_preflight_identity_for_its_member_witness() {
-        let org = Uuid::from_u128(1);
-        let owner = Uuid::from_u128(2);
-        let manager = Some(Uuid::from_u128(3));
+        let org = Uuid::from_u128(0x01900000000070008000000000000000 + 1);
+        let owner = Uuid::from_u128(0x01900000000070008000000000000000 + 2);
+        let manager = Some(Uuid::from_u128(0x01900000000070008000000000000000 + 3));
         let current = |organization, owner, manager, version| Current {
             organization,
             owner,
@@ -605,9 +605,24 @@ mod tests {
         let before = current(org, owner, manager, 5);
         assert!(validate_locked(&before, &current(org, owner, manager, 5), 5).is_ok());
         for changed in [
-            current(Uuid::from_u128(4), owner, manager, 5),
-            current(org, Uuid::from_u128(4), manager, 5),
-            current(org, owner, Some(Uuid::from_u128(4)), 5),
+            current(
+                Uuid::from_u128(0x01900000000070008000000000000000 + 4),
+                owner,
+                manager,
+                5,
+            ),
+            current(
+                org,
+                Uuid::from_u128(0x01900000000070008000000000000000 + 4),
+                manager,
+                5,
+            ),
+            current(
+                org,
+                owner,
+                Some(Uuid::from_u128(0x01900000000070008000000000000000 + 4)),
+                5,
+            ),
             current(org, owner, None, 5),
             current(org, owner, manager, 6),
         ] {
@@ -627,6 +642,9 @@ mod tests {
         assert!(parse_create(json!({"organizationId":USER,"businessStatus":"CLOSED","businessContact":"x","managerUserId":null})).unwrap().manager.is_none());
         for body in [
             json!({"organizationId":"invalid","businessStatus":"OPEN","businessContact":""}),
+            // Intentional legacy v4 input must not create an association.
+            json!({"organizationId":"11111111-1111-4111-8111-111111111111","businessStatus":"OPEN","businessContact":""}),
+            json!({"organizationId":USER,"businessStatus":"OPEN","businessContact":"","managerUserId":"11111111-1111-7111-c111-111111111111"}),
             json!({"organizationId":USER,"businessStatus":"open","businessContact":""}),
             json!({"organizationId":USER,"businessStatus":"OPEN"}),
             json!({"organizationId":USER,"businessStatus":"OPEN","businessContact":null}),
@@ -658,6 +676,8 @@ mod tests {
             json!({"version":1,"businessStatus":null}),
             json!({"version":1,"businessContact":null}),
             json!({"version":1,"managerUserId":false}),
+            // Intentional legacy v4 negative fixture.
+            json!({"version":1,"managerUserId":"11111111-1111-4111-8111-111111111111"}),
             json!({"version":1,"name":"new","ownerUserId":USER}),
             json!({"version":1,"name":"new","createdAt":"2026-10-18"}),
         ] {

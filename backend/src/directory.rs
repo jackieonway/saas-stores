@@ -213,9 +213,9 @@ mod tests {
             "q=%",
             "resource=store-staff",
             "action=assign",
-            "organizationId=11111111-1111-4111-8111-111111111111",
-            "tenantId=11111111-1111-4111-8111-111111111111",
-            "ownerUserId=11111111-1111-4111-8111-111111111111",
+            "organizationId=11111111-1111-7111-8111-111111111111",
+            "tenantId=11111111-1111-7111-8111-111111111111",
+            "ownerUserId=11111111-1111-7111-8111-111111111111",
         ] {
             assert!(member_search(Some(raw)).is_err(), "{raw}");
         }

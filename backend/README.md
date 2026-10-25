@@ -1,10 +1,20 @@
 # 门店 API 服务
 
-`stores-api` 使用 Rust `1.97.0`、Axum、SQLx 和 PostgreSQL，默认监听 `0.0.0.0:3031`，业务前缀 `/stores-api`。服务拥有自己的数据库与账号，启动时执行并核验内嵌迁移。平台身份、有效 STORE 组织投影和直接成员通过 HTTP 获取。平台维护组织身份及成员，服务只维护营业资料、营业联系人和日报。
+`stores-api` 使用 Rust `1.97.0`、Axum、SQLx 和 PostgreSQL，默认监听 `0.0.0.0:3031`，业务前缀 `/stores-api`。服务拥有自己的数据库与账号，默认启动执行并核验内嵌迁移；已完成 UUID 导入的目标使用下述 `imported` 只读启动校验。平台身份、有效 STORE 组织投影和直接成员通过 HTTP 获取。平台维护组织身份及成员，服务只维护营业资料、营业联系人和日报。
 
 ## 启动和源码
 
 程序只读取启动环境，不自动加载 `.env` 或 `config.example`。完整示例见 [开发指南](docs/development.md)，生产运行见 [部署指南](docs/deployment.md)。注入配置后，在本目录执行 `cargo run --locked`；本目录也是 `docker build` 的后端上下文。
+
+独立迁移命令为 `cargo run --locked --bin stores-migrate`，导入前初始化可使用 `cargo run --locked --bin stores-migrate -- --import`。两种方式都只读取 `STORES_DATABASE_URL`，连接已创建的数据库、执行并核验原有正式迁移，然后关闭连接退出；不启动 HTTP，不要求平台或 CORS 配置，不创建数据库或角色，`--import` 不导入数据。门店没有 seed，`--seed` 会被拒绝；`--seed --import` 明确互斥，未知或重复参数也会在连接前失败。
+
+迁移命令拒绝 `PG*` 环境变量，避免驱动继承 URL 之外的端口、密码、证书或会话设置；数据库 TLS 仍通过 `STORES_DATABASE_URL` 的受支持参数配置。连接获取限时 5 秒，迁移限时 5 分钟，关闭连接限时 10 秒。先停用业务进程，由导入流程保持独占；该命令不提供数据导入互斥锁。默认 `cargo run --locked` 仍启动 `stores-api`。
+
+迁移命令不读取默认 pgpass 文件。新库 owner 使用 `NOLOGIN` 时，可由本机 postgres peer 会话通过 URL 显式指定 owner，例如 `postgresql://postgres@localhost:5432/new_stores_db?host=/run/postgresql&options[role]=new_stores_owner`。`host` 必须是规范绝对 Unix socket 目录，`options[role]` 仅接受 1–63 字节的小写字母、数字、下划线标识符且不能以数字开头；该委托形式要求 `postgres@localhost`、无密码并显式给出 socket。其他启动 options、未知或重复 URL 参数均拒绝。正常 API 的 URL 参数合同不变。
+
+API 的 `STORES_DATABASE_INIT_MODE` 缺省或为 `seed` 时保持原初始化行为（门店没有 seed 数据）。`import` 只能用于上述独立迁移 CLI；普通 API 会在连接前拒绝该值。`imported` 要求同时设置 `STORES_EXPECTED_DATABASE`、`STORES_IMPORT_MARKER` 和 `STORES_EXPECTED_SCHEMA_SHA256`；其他模式携带任一字段，即使为空，也会在连接前失败。数据库名必须与 URL 路径按 UTF-8 百分号解码后的名称完全相同，拒绝控制字符。marker 必须完整匹配 `saas-uuid-import/1/<规范小写 RFC UUIDv7>/<64 位小写十六进制摘要>`，schema 摘要也必须为 64 位小写十六进制；这些值由已完成导入的认证回执提供，API 不生成或更新它们。
+
+`imported` 启动跳过所有迁移与初始化写入。在同一个 `READ ONLY`、`REPEATABLE READ` 事务中，依次核对实际库名、数据库 COMMENT 与 marker、`current_user` / `session_user` 与 URL LOGIN 账号、运行角色权限、纯 catalog 有序 JSON 的 SHA-256，以及现有完整 SQLx migration history / v3 fingerprint 链。schema 摘要与 UUID 导入使用相同的 canonical JSON 字节合同；校验不扫描业务数据行。运行账号必须独立于数据库、用户 schema 和对象 owner，不能是超级用户或具有建库、建角色、replication、bypass RLS 权限，也不能具有数据库 CREATE / TEMPORARY、非临时 schema CREATE 权限，或通过继承和 `SET ROLE` 到达 owner / 高权角色；CREATE / TEMPORARY 检查同时覆盖可通过 `SET ROLE` 到达的角色。部署时 owner 保持 `NOLOGIN`，数据库仅为 API LOGIN 授予 CONNECT，并撤销 PUBLIC 的默认 TEMPORARY；schema / 表 / 函数只授予业务所需 USAGE、DML 与只读校验的 SELECT / EXECUTE。全部检查通过后才绑定 HTTP；失败仅输出固定分类，不输出 URL、账号、库名、marker 或数据库驱动细节。
 
 | 模块 | 责任 |
 | --- | --- |
@@ -15,6 +25,7 @@
 | `directory.rs` | 受控成员目录用途及搜索 / 分页校验 |
 | `domain.rs` | 金额、日期、UUID、版本、查询与分页规则 |
 | `migrations.rs`、`migrations/` | 迁移历史和数据库结构契约 |
+| `imported_database.rs`、`imported_schema.sql` | 导入回执、运行角色与 catalog 摘要的只读启动校验 |
 | `telemetry.rs` | 受保护指标及固定分类诊断 |
 
 ## 必需环境与来源
@@ -40,6 +51,10 @@ PostgreSQL URI 只接受 `sslmode` / `ssl-mode`、根证书 `sslrootcert` / `ssl
 | `STORES_HOST` | `0.0.0.0` | 数字 IPv4 / IPv6，不接受域名 |
 | `STORES_PORT` | `3031` | 生产 1–65535，非生产允许 0 |
 | `STORES_DB_MAX_CONNECTIONS` | `10` | 1–30 |
+| `STORES_DATABASE_INIT_MODE` | `seed` | 缺省 / `seed` 执行原初始化；`imported` 只读验证导入回执；API 拒绝 `import` |
+| `STORES_EXPECTED_DATABASE` | 不设置 | 仅 `imported` 必填，完全匹配 URL 解码后的数据库名 |
+| `STORES_IMPORT_MARKER` | 不设置 | 仅 `imported` 必填，完整匹配数据库 COMMENT 的认证导入 marker |
+| `STORES_EXPECTED_SCHEMA_SHA256` | 不设置 | 仅 `imported` 必填，认证回执中的 64 位小写 catalog SHA-256 |
 | `STORES_DB_ACQUIRE_TIMEOUT_MS` | `5000` | 100–30000 |
 | `STORES_DB_STATEMENT_TIMEOUT_MS` | `5000` | 100–30000 |
 | `STORES_DB_LOCK_TIMEOUT_MS` | `5000` | 100–30000 |
@@ -65,6 +80,8 @@ PostgreSQL URI 只接受 `sslmode` / `ssl-mode`、根证书 `sslrootcert` / `ssl
 数据库包含营业档案、历史员工关联、日报和审计事件。当前每个 tenant / STORE organization 只能有一份营业档案，同一门店同一营业日只能有一份日报。平台名称、编码、地址和层级不接受业务写入；名称响应来自平台实时投影，成员列表来自平台直接成员。旧 staff 写路由返回 410，不再写关联表。更新采用整数 `version` 乐观并发；金额以十进制字符串传输。详情、分页、汇总和写入都受相同授权范围约束，完整输入和恢复规则见 [API](API.md)。
 
 `0002_platform_owned_store_identity.sql` 先验证原 v1 结构，再冻结旧 stores.name 实际修改、阻止 store_staff 写入并建立 v2 fingerprint；原 0001、v1 函数与 baseline 字节保持不变，旧映射和历史数据不自动删除或转类型。迁移历史 checksum 和 schema fingerprint 不匹配时拒绝启动或就绪。通过新增迁移演进结构；不要改写已执行 SQL、迁移历史或 fingerprint 来跳过校验。存活接口只证明进程可响应，就绪接口同时校验业务库结构。
+
+`0003_uuid_v7.sql` 在验证 v2 后，为全部 23 个 UUID 列追加 version 7／RFC variant 约束，并建立独立的 v3 fingerprint 和 `_stores_schema_contract_v3`；历史 migration、v1/v2 存储摘要均保原。应用显式生成 UUID v7，外部 typed ID、Path、DTO 和过滤条件拒绝 v4、nil、错误 variant。已有非 v7 业务行会使迁移原子失败，需按平台 UUID 专项先导出重编号并导入全新目标库，再启动新版本；不能对仍使用 v4 的源库直接启动新 binary。
 
 ```sh
 cargo fmt --all -- --check

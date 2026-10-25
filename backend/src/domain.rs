@@ -98,9 +98,34 @@ mod tests {
         ] {
             assert!(version(&value).is_err());
         }
-        assert!(uuid("00000000-0000-4000-8000-000000000001").is_ok());
-        assert!(uuid("00000000000040008000000000000001").is_err());
-        assert!(uuid("00000000-0000-0000-0000-000000000000").is_err());
+        assert!(uuid("00000000-0000-7000-8000-000000000001").is_ok());
+        for raw in [
+            "00000000000070008000000000000001", // Compact spelling is not canonical.
+            "00000000-0000-0000-0000-000000000000", // Nil rejection sentinel.
+            "00000000-0000-4000-8000-000000000001", // Intentional legacy v4 negative fixture.
+            "00000000-0000-7000-0000-000000000001", // NCS variant.
+            "00000000-0000-7000-c000-000000000001", // Microsoft variant.
+            "00000000-0000-7000-e000-000000000001", // Reserved variant.
+            "not-a-uuid",
+        ] {
+            assert!(uuid(raw).is_err(), "accepted {raw}");
+        }
+    }
+
+    #[test]
+    fn generated_identities_are_v7_and_unique_across_threads() {
+        let jobs: Vec<_> = (0..4)
+            .map(|_| std::thread::spawn(|| (0..1024).map(|_| new_id()).collect::<Vec<_>>()))
+            .collect();
+        let mut ids = std::collections::BTreeSet::new();
+        for job in jobs {
+            for id in job.join().unwrap() {
+                assert_eq!(id.get_version_num(), 7);
+                assert_eq!(id.get_variant(), uuid::Variant::RFC4122);
+                assert_eq!(uuid(&id.to_string()).unwrap(), id);
+                assert!(ids.insert(id));
+            }
+        }
     }
 }
 
@@ -177,12 +202,18 @@ impl Day {
 pub(crate) fn uuid(raw: &str) -> Result<Uuid, ApiError> {
     let parsed = Uuid::parse_str(raw).map_err(|_| ApiError::validation())?;
     if raw.len() != 36
-        || parsed.is_nil()
+        || parsed.get_version_num() != 7
+        || parsed.get_variant() != uuid::Variant::RFC4122
         || !parsed.hyphenated().to_string().eq_ignore_ascii_case(raw)
     {
         return Err(ApiError::validation());
     }
     Ok(parsed)
+}
+
+/// The single generator for system-owned persisted and request identities.
+pub(crate) fn new_id() -> Uuid {
+    Uuid::now_v7()
 }
 
 pub(crate) fn version(value: &Value) -> Result<i32, ApiError> {

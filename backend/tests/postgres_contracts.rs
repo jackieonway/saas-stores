@@ -19,6 +19,10 @@ use uuid::Uuid;
 #[path = "../src/authorization/test_http.rs"]
 mod test_http;
 
+fn new_id() -> Uuid {
+    Uuid::now_v7()
+}
+
 fn owned_server(url: &url::Url, owner: &str, local_owner: Option<&str>) -> bool {
     let Some(local_owner) = local_owner else {
         return url.host_str() == Some(format!("{owner}-postgres").as_str());
@@ -80,7 +84,7 @@ where
         .connect(&raw)
         .await
         .expect("owned admin connection");
-    let name = format!("phase26_stores_sql_{}", Uuid::new_v4().simple());
+    let name = format!("phase26_stores_sql_{}", new_id().simple());
     sqlx::query(&format!("CREATE DATABASE \"{name}\" TEMPLATE template0"))
         .execute(&admin)
         .await
@@ -154,15 +158,15 @@ async fn initialize_bounded(pool: &PgPool) -> Result<(), stores_api::ServiceErro
         .expect("migration verification or recovery exceeded its three-second budget")
 }
 
-async fn initialize_v1(pool: &PgPool) {
+async fn initialize_through(pool: &PgPool, version: i64) {
     let all = sqlx::migrate!("./migrations");
-    let v1 = all
+    let migrations = all
         .iter()
-        .find(|migration| migration.version == 1)
-        .unwrap()
-        .clone();
+        .filter(|migration| migration.version <= version)
+        .cloned()
+        .collect();
     let migrator = sqlx::migrate::Migrator {
-        migrations: Cow::Owned(vec![v1]),
+        migrations: Cow::Owned(migrations),
         ..sqlx::migrate::Migrator::DEFAULT
     };
     let mut connection = pool.acquire().await.unwrap().detach();
@@ -181,26 +185,121 @@ async fn business_snapshot(pool: &PgPool) -> serde_json::Value {
 
 #[tokio::test]
 #[ignore = "requires the owned CI PostgreSQL driver"]
+async fn uuid_v7_upgrade_rejects_v4_rows_without_rewriting_any_old_baseline() {
+    owned(|pool| async move {
+        initialize_through(&pool, 2).await;
+        // Intentional v4 legacy source. This test must prove fail-closed upgrade,
+        // rather than silently blessing a mixed UUID identity epoch.
+        let old = Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+        sqlx::query("INSERT INTO stores(id,tenant_id,organization_id,owner_user_id,name,business_status,business_contact) VALUES($1,$1,$1,$1,'Legacy v4','OPEN','')")
+            .bind(old).execute(&pool).await.unwrap();
+        let before = business_snapshot(&pool).await;
+        let baselines: (String, String) = sqlx::query_as("SELECT v1.fingerprint,v2.fingerprint FROM public._stores_schema_contract AS v1 JOIN public._stores_schema_contract_v2 AS v2 USING(singleton)")
+            .fetch_one(&pool).await.unwrap();
+        let checksums: Vec<(i64, Vec<u8>)> = sqlx::query_as("SELECT version,checksum FROM public._sqlx_migrations ORDER BY version")
+            .fetch_all(&pool).await.unwrap();
+        for _ in 0..2 {
+            assert!(initialize_bounded(&pool).await.is_err());
+            assert_eq!(business_snapshot(&pool).await, before);
+            let current: (String, String) = sqlx::query_as("SELECT v1.fingerprint,v2.fingerprint FROM public._stores_schema_contract AS v1 JOIN public._stores_schema_contract_v2 AS v2 USING(singleton)")
+                .fetch_one(&pool).await.unwrap();
+            assert_eq!(current, baselines);
+            let current: Vec<(i64, Vec<u8>)> = sqlx::query_as("SELECT version,checksum FROM public._sqlx_migrations ORDER BY version")
+                .fetch_all(&pool).await.unwrap();
+            assert_eq!(current, checksums);
+            let rolled_back: bool = sqlx::query_scalar("SELECT pg_catalog.to_regclass('public._stores_schema_contract_v3') IS NULL AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_constraint WHERE connamespace='public'::regnamespace AND conname LIKE '%_uuid_v7')")
+                .fetch_one(&pool).await.unwrap();
+            assert!(rolled_back);
+        }
+        check("uuid_v7_legacy_rows_fail_without_rewriting_data_or_baselines");
+    }).await;
+}
+
+#[tokio::test]
+#[ignore = "requires the owned CI PostgreSQL driver"]
+async fn uuid_v7_contract_covers_all_columns_and_preserves_the_v2_snapshot() {
+    owned(|pool| async move {
+        initialize_through(&pool, 2).await;
+        let before: (String, String) = sqlx::query_as("SELECT v1.fingerprint,v2.fingerprint FROM public._stores_schema_contract AS v1 JOIN public._stores_schema_contract_v2 AS v2 USING(singleton)")
+            .fetch_one(&pool).await.unwrap();
+        sqlx::query("ALTER TABLE public.stores ADD COLUMN unexpected_uuid_upgrade TEXT").execute(&pool).await.unwrap();
+        assert!(initialize_bounded(&pool).await.is_err(), "v3 must verify the existing v2 catalog before establishing a contract");
+        let absent: bool = sqlx::query_scalar("SELECT pg_catalog.to_regclass('public._stores_schema_contract_v3') IS NULL").fetch_one(&pool).await.unwrap();
+        assert!(absent);
+        sqlx::query("ALTER TABLE public.stores DROP COLUMN unexpected_uuid_upgrade").execute(&pool).await.unwrap();
+        initialize_bounded(&pool).await.unwrap();
+        let after: (String, String, String) = sqlx::query_as("SELECT v1.fingerprint,v2.fingerprint,v3.legacy_fingerprint FROM public._stores_schema_contract AS v1 JOIN public._stores_schema_contract_v2 AS v2 USING(singleton) JOIN public._stores_schema_contract_v3 AS v3 USING(singleton)")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!((&after.0, &after.1, &after.2), (&before.0, &before.1, &before.1));
+
+        // Discover every actual UUID column and evaluate its installed CHECK,
+        // including the permanently read-only staff history columns.
+        let checks: Vec<(String, String, Option<String>, Option<bool>)> = sqlx::query_as("SELECT c.relname,a.attname,pg_catalog.pg_get_expr(k.conbin,k.conrelid),k.convalidated FROM pg_catalog.pg_class AS c JOIN pg_catalog.pg_namespace AS n ON n.oid=c.relnamespace JOIN pg_catalog.pg_attribute AS a ON a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped LEFT JOIN pg_catalog.pg_constraint AS k ON k.conrelid=c.oid AND k.conkey=ARRAY[a.attnum] AND k.contype='c' AND k.conname=c.relname||'_'||a.attname||'_uuid_v7' WHERE n.nspname='public' AND c.relkind IN ('r','p') AND a.atttypid='uuid'::regtype ORDER BY c.relname,a.attnum")
+            .fetch_all(&pool).await.unwrap();
+        assert_eq!(checks.len(), 23);
+        for (table, column, expression, validated) in checks {
+            assert_eq!(validated, Some(true), "{table}.{column} must have a validated UUID constraint");
+            let expression = expression.unwrap();
+            assert!(column.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'));
+            let sql = format!("SELECT {expression} FROM (SELECT $1::uuid AS {column}) AS fixture");
+            let accepted: bool = sqlx::query_scalar(&sql).bind(new_id()).fetch_one(&pool).await.unwrap();
+            assert!(accepted, "{table}.{column} must accept v7");
+            for raw in [
+                "11111111-1111-4111-8111-111111111111", // Intentional v4 negative fixture.
+                "11111111-1111-7111-0111-111111111111", // NCS variant.
+                "11111111-1111-7111-c111-111111111111", // Microsoft variant.
+                "11111111-1111-7111-e111-111111111111", // Reserved variant.
+                "00000000-0000-0000-0000-000000000000", // Nil sentinel.
+            ] {
+                let accepted: bool = sqlx::query_scalar(&sql).bind(Uuid::parse_str(raw).unwrap()).fetch_one(&pool).await.unwrap();
+                assert!(!accepted, "{table}.{column} accepted {raw}");
+            }
+        }
+        let defaults: i64 = sqlx::query_scalar("SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND udt_name='uuid' AND column_default IS NOT NULL")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(defaults, 0);
+        for raw in [
+            "11111111-1111-4111-8111-111111111111", // Intentional v4 negative fixture.
+            "11111111-1111-7111-c111-111111111111", // Wrong variant.
+        ] {
+            let error = sqlx::query("INSERT INTO stores(id,tenant_id,organization_id,owner_user_id,name,business_status,business_contact) VALUES($1,$2,$3,$4,'Rejected','OPEN','')")
+                .bind(Uuid::parse_str(raw).unwrap()).bind(new_id()).bind(new_id()).bind(new_id()).execute(&pool).await.unwrap_err();
+            assert_eq!(error.as_database_error().and_then(|error| error.constraint()), Some("stores_id_uuid_v7"));
+        }
+        sqlx::query("ALTER TABLE public._stores_schema_contract_v3 ADD COLUMN unexpected TEXT").execute(&pool).await.unwrap();
+        assert!(initialize_bounded(&pool).await.is_err());
+        sqlx::query("ALTER TABLE public._stores_schema_contract_v3 DROP COLUMN unexpected").execute(&pool).await.unwrap();
+        initialize_bounded(&pool).await.unwrap();
+        sqlx::query("ALTER FUNCTION public.stores_schema_fingerprint_v3() VOLATILE").execute(&pool).await.unwrap();
+        assert!(initialize_bounded(&pool).await.is_err());
+        sqlx::query("ALTER FUNCTION public.stores_schema_fingerprint_v3() STABLE").execute(&pool).await.unwrap();
+        initialize_bounded(&pool).await.unwrap();
+        check("all_23_uuid_columns_enforce_v7_and_rfc_variant_with_v3_contract");
+    }).await;
+}
+
+#[tokio::test]
+#[ignore = "requires the owned CI PostgreSQL driver"]
 async fn legacy_upgrade_preserves_data_and_freezes_platform_owned_fields() {
     owned(|pool| async move {
-        initialize_v1(&pool).await;
-        let tenant = Uuid::new_v4();
-        let org = Uuid::new_v4();
-        let user = Uuid::new_v4();
-        let store = Uuid::new_v4();
+        initialize_through(&pool, 1).await;
+        let tenant = new_id();
+        let org = new_id();
+        let user = new_id();
+        let store = new_id();
         sqlx::query("INSERT INTO stores(id,tenant_id,organization_id,owner_user_id,name,business_status,business_contact,manager_user_id,manager_display_name) VALUES($1,$2,$3,$4,'Legacy store','OPEN','Legacy contact',$4,'Legacy manager')").bind(store).bind(tenant).bind(org).bind(user).execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO store_daily_reports(id,tenant_id,store_id,organization_id,owner_user_id,business_date,amount,note) VALUES($1,$2,$3,$4,$5,DATE '2026-10-20','42.33'::numeric,'Legacy note')").bind(Uuid::new_v4()).bind(tenant).bind(store).bind(org).bind(user).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO store_daily_reports(id,tenant_id,store_id,organization_id,owner_user_id,business_date,amount,note) VALUES($1,$2,$3,$4,$5,DATE '2026-10-20','42.33'::numeric,'Legacy note')").bind(new_id()).bind(tenant).bind(store).bind(org).bind(user).execute(&pool).await.unwrap();
 
         // Exercise the unchanged v1 staff contract before migrating its history.
-        let link = Uuid::new_v4();
+        let link = new_id();
         sqlx::query("INSERT INTO store_staff(id,tenant_id,store_id,organization_id,owner_user_id,user_id,display_name,created_by_user_id) VALUES($1,$2,$3,$4,$5,$5,'Member',$5)").bind(link).bind(tenant).bind(store).bind(org).bind(user).execute(&pool).await.unwrap();
-        let duplicate = sqlx::query("INSERT INTO store_staff(id,tenant_id,store_id,organization_id,owner_user_id,user_id,display_name,created_by_user_id) VALUES($1,$2,$3,$4,$5,$5,'Member',$5)").bind(Uuid::new_v4()).bind(tenant).bind(store).bind(org).bind(user).execute(&pool).await.expect_err("active staff uniqueness");
+        let duplicate = sqlx::query("INSERT INTO store_staff(id,tenant_id,store_id,organization_id,owner_user_id,user_id,display_name,created_by_user_id) VALUES($1,$2,$3,$4,$5,$5,'Member',$5)").bind(new_id()).bind(tenant).bind(store).bind(org).bind(user).execute(&pool).await.expect_err("active staff uniqueness");
         assert_eq!(duplicate.as_database_error().and_then(|error| error.constraint()), Some("store_staff_active_member_key"));
         sqlx::query("UPDATE store_staff SET removed_at=now(),updated_at=now(),version=version+1 WHERE id=$1 AND version=1").bind(link).execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO store_staff(id,tenant_id,store_id,organization_id,owner_user_id,user_id,display_name,created_by_user_id) VALUES($1,$2,$3,$4,$5,$5,'Member',$5)").bind(Uuid::new_v4()).bind(tenant).bind(store).bind(org).bind(user).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO store_staff(id,tenant_id,store_id,organization_id,owner_user_id,user_id,display_name,created_by_user_id) VALUES($1,$2,$3,$4,$5,$5,'Member',$5)").bind(new_id()).bind(tenant).bind(store).bind(org).bind(user).execute(&pool).await.unwrap();
         let history: (i64, i64) = sqlx::query_as("SELECT count(*),count(*) FILTER(WHERE removed_at IS NULL) FROM store_staff").fetch_one(&pool).await.unwrap();
         assert_eq!(history, (2, 1));
-        sqlx::query("INSERT INTO store_audit_events(id,tenant_id,organization_id,actor_user_id,resource_code,action_code,entity_id,request_id) VALUES($1,$2,$3,$4,'store-staff','assign',$5,$6)").bind(Uuid::new_v4()).bind(tenant).bind(org).bind(user).bind(link).bind(Uuid::new_v4()).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO store_audit_events(id,tenant_id,organization_id,actor_user_id,resource_code,action_code,entity_id,request_id) VALUES($1,$2,$3,$4,'store-staff','assign',$5,$6)").bind(new_id()).bind(tenant).bind(org).bind(user).bind(link).bind(new_id()).execute(&pool).await.unwrap();
         check("staff_active_uniqueness_and_removed_history");
 
         let before = business_snapshot(&pool).await;
@@ -213,7 +312,7 @@ async fn legacy_upgrade_preserves_data_and_freezes_platform_owned_fields() {
         assert!(unapplied, "failed upgrade must not record a new baseline");
         sqlx::query("ALTER TABLE public.stores DROP COLUMN upgrade_unexpected").execute(&pool).await.unwrap();
         initialize_bounded(&pool).await.expect("verified v1 database upgrades");
-        initialize_bounded(&pool).await.expect("v2 startup is repeatable");
+        initialize_bounded(&pool).await.expect("v3 startup is repeatable");
         assert_eq!(business_snapshot(&pool).await, before, "upgrade preserves every business and audit value");
         let baselines: (String, String) = sqlx::query_as("SELECT v1.fingerprint,v2.legacy_fingerprint FROM public._stores_schema_contract AS v1 JOIN public._stores_schema_contract_v2 AS v2 USING(singleton)").fetch_one(&pool).await.unwrap();
         assert_eq!(baselines, (legacy_baseline.clone(), legacy_baseline));
@@ -227,7 +326,7 @@ async fn legacy_upgrade_preserves_data_and_freezes_platform_owned_fields() {
         reject(&pool, "UPDATE store_staff SET removed_at=now(),updated_at=now(),version=version+1 WHERE removed_at IS NULL", "23514").await;
         reject(&pool, "DELETE FROM store_staff", "23514").await;
         reject(&pool, "TRUNCATE store_staff", "23514").await;
-        let blocked_insert = sqlx::query("INSERT INTO store_staff(id,tenant_id,store_id,organization_id,owner_user_id,user_id,display_name,created_by_user_id) VALUES($1,$2,$3,$4,$5,$5,'Member',$5)").bind(Uuid::new_v4()).bind(tenant).bind(store).bind(org).bind(Uuid::new_v4()).execute(&pool).await.expect_err("old binary cannot assign staff");
+        let blocked_insert = sqlx::query("INSERT INTO store_staff(id,tenant_id,store_id,organization_id,owner_user_id,user_id,display_name,created_by_user_id) VALUES($1,$2,$3,$4,$5,$5,'Member',$5)").bind(new_id()).bind(tenant).bind(store).bind(org).bind(new_id()).execute(&pool).await.expect_err("old binary cannot assign staff");
         assert_eq!(blocked_insert.as_database_error().and_then(|error| error.code()).as_deref(), Some("23514"));
         assert_eq!(business_snapshot(&pool).await, before, "blocked legacy writes preserve all rows");
         sqlx::query("UPDATE stores SET name=name,business_status='CLOSED',business_contact='Updated contact',version=version+1,updated_at=now() WHERE id=$1 AND version=1").bind(store).execute(&pool).await.unwrap();
@@ -249,10 +348,10 @@ async fn postgres_contracts() {
         assert_eq!(tables, 4);
         check("empty_and_repeat_initialization");
 
-        let tenant = Uuid::new_v4();
-        let org = Uuid::new_v4();
-        let user = Uuid::new_v4();
-        let store = Uuid::new_v4();
+        let tenant = new_id();
+        let org = new_id();
+        let user = new_id();
+        let store = new_id();
         sqlx::query("INSERT INTO stores(id,tenant_id,organization_id,owner_user_id,name,business_status,business_contact) VALUES($1,$2,$3,$4,'Exact store','OPEN','')").bind(store).bind(tenant).bind(org).bind(user).execute(&pool).await.unwrap();
 
         let gate = Arc::new(Barrier::new(2));
@@ -264,7 +363,7 @@ async fn postgres_contracts() {
                 gate.wait().await;
                 let mut tx = pool.begin().await.unwrap();
                 let result = sqlx::query("INSERT INTO store_daily_reports(id,tenant_id,store_id,organization_id,owner_user_id,business_date,amount,note) VALUES($1,$2,$3,$4,$5,DATE '2026-10-18','0.10'::numeric,'')")
-                    .bind(Uuid::new_v4()).bind(tenant).bind(store).bind(org).bind(user).execute(&mut *tx).await;
+                    .bind(new_id()).bind(tenant).bind(store).bind(org).bind(user).execute(&mut *tx).await;
                 match result {
                     Ok(_) => { tx.commit().await.unwrap(); true }
                     Err(error) => {
@@ -284,37 +383,37 @@ async fn postgres_contracts() {
 
         for day in ["0001-01-01", "9999-12-31"] {
             sqlx::query("INSERT INTO store_daily_reports(id,tenant_id,store_id,organization_id,owner_user_id,business_date,amount) VALUES($1,$2,$3,$4,$5,$6::date,'9999999999999999.99'::numeric)")
-                .bind(Uuid::new_v4()).bind(tenant).bind(store).bind(org).bind(user).bind(day).execute(&pool).await.unwrap();
+                .bind(new_id()).bind(tenant).bind(store).bind(org).bind(user).bind(day).execute(&pool).await.unwrap();
         }
         let exact: String = sqlx::query_scalar("SELECT sum(amount)::text FROM store_daily_reports WHERE business_date<>DATE '2026-10-18'").fetch_one(&pool).await.unwrap();
         assert_eq!(exact, "19999999999999999.98");
         let invalid_amount = sqlx::query("INSERT INTO store_daily_reports(id,tenant_id,store_id,organization_id,owner_user_id,business_date,amount) VALUES($1,$2,$3,$4,$5,DATE '2026-10-19','NaN'::numeric)")
-            .bind(Uuid::new_v4()).bind(tenant).bind(store).bind(org).bind(user).execute(&pool).await.expect_err("numeric NaN is not a business amount");
+            .bind(new_id()).bind(tenant).bind(store).bind(org).bind(user).execute(&pool).await.expect_err("numeric NaN is not a business amount");
         assert_eq!(invalid_amount.as_database_error().and_then(|error| error.code()).as_deref(), Some("23514"));
         check("numeric_precision_and_large_exact_sum");
 
-        reject(&pool, "UPDATE stores SET organization_id='00000000-0000-4000-8000-000000000011',version=version+1", "23514").await;
+        reject(&pool, "UPDATE stores SET organization_id='00000000-0000-7000-8000-000000000011',version=version+1", "23514").await;
         reject(&pool, "UPDATE stores SET name='stale write'", "23514").await;
         reject(&pool, "UPDATE store_daily_reports SET business_date=business_date+1,version=version+1 WHERE business_date=DATE '2026-10-18'", "23514").await;
-        reject(&pool, "UPDATE store_daily_reports SET owner_user_id='00000000-0000-4000-8000-000000000012',version=version+1", "23514").await;
+        reject(&pool, "UPDATE store_daily_reports SET owner_user_id='00000000-0000-7000-8000-000000000012',version=version+1", "23514").await;
         reject(&pool, "UPDATE stores SET name='old binary rename',version=version+1", "23514").await;
         let changed = sqlx::query("UPDATE stores SET business_status='CLOSED',version=version+1,updated_at=now() WHERE id=$1 AND version=1").bind(store).execute(&pool).await.unwrap().rows_affected();
         let stale = sqlx::query("UPDATE stores SET business_status='OPEN',version=version+1 WHERE id=$1 AND version=1").bind(store).execute(&pool).await.unwrap().rows_affected();
         assert_eq!((changed, stale), (1, 0));
         check("immutable_ownership_date_and_optimistic_version");
 
-        let bad_tenant = sqlx::query("INSERT INTO store_daily_reports(id,tenant_id,store_id,organization_id,owner_user_id,business_date,amount) VALUES($1,$2,$3,$4,$5,DATE '2026-10-19',0)").bind(Uuid::new_v4()).bind(Uuid::new_v4()).bind(store).bind(org).bind(user).execute(&pool).await.expect_err("composite FK forbids cross tenant store");
+        let bad_tenant = sqlx::query("INSERT INTO store_daily_reports(id,tenant_id,store_id,organization_id,owner_user_id,business_date,amount) VALUES($1,$2,$3,$4,$5,DATE '2026-10-19',0)").bind(new_id()).bind(new_id()).bind(store).bind(org).bind(user).execute(&pool).await.expect_err("composite FK forbids cross tenant store");
         assert_eq!(bad_tenant.as_database_error().and_then(|error| error.code()).as_deref(), Some("23503"));
         check("composite_store_tenant_organization_fk");
 
-        let rolled_back = Uuid::new_v4();
+        let rolled_back = new_id();
         let mut tx = pool.begin().await.unwrap();
         sqlx::query("INSERT INTO store_daily_reports(id,tenant_id,store_id,organization_id,owner_user_id,business_date,amount) VALUES($1,$2,$3,$4,$5,DATE '2026-10-20',1)").bind(rolled_back).bind(tenant).bind(store).bind(org).bind(user).execute(&mut *tx).await.unwrap();
-        sqlx::query("INSERT INTO store_audit_events(id,tenant_id,organization_id,actor_user_id,resource_code,action_code,entity_id,request_id) VALUES($1,$2,$3,$4,'store-daily-report','create',$5,$6)").bind(Uuid::new_v4()).bind(tenant).bind(org).bind(user).bind(rolled_back).bind(Uuid::new_v4()).execute(&mut *tx).await.unwrap();
+        sqlx::query("INSERT INTO store_audit_events(id,tenant_id,organization_id,actor_user_id,resource_code,action_code,entity_id,request_id) VALUES($1,$2,$3,$4,'store-daily-report','create',$5,$6)").bind(new_id()).bind(tenant).bind(org).bind(user).bind(rolled_back).bind(new_id()).execute(&mut *tx).await.unwrap();
         tx.rollback().await.unwrap();
         let absent: bool = sqlx::query_scalar("SELECT NOT EXISTS(SELECT 1 FROM store_daily_reports WHERE id=$1) AND NOT EXISTS(SELECT 1 FROM store_audit_events WHERE entity_id=$1)").bind(rolled_back).fetch_one(&pool).await.unwrap();
         assert!(absent);
-        sqlx::query("INSERT INTO store_audit_events(id,tenant_id,organization_id,actor_user_id,resource_code,action_code,entity_id,request_id) VALUES($1,$2,$3,$4,'store','update',$5,$6)").bind(Uuid::new_v4()).bind(tenant).bind(org).bind(user).bind(store).bind(Uuid::new_v4()).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO store_audit_events(id,tenant_id,organization_id,actor_user_id,resource_code,action_code,entity_id,request_id) VALUES($1,$2,$3,$4,'store','update',$5,$6)").bind(new_id()).bind(tenant).bind(org).bind(user).bind(store).bind(new_id()).execute(&pool).await.unwrap();
         reject(&pool, "DELETE FROM store_audit_events", "23514").await;
         check("atomic_audit_rollback_and_append_only");
 
@@ -359,6 +458,20 @@ async fn postgres_contracts() {
     }).await;
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FixtureMemberType {
+    Employee,
+    Customer,
+}
+
+struct FixtureMember {
+    user: Uuid,
+    membership: Uuid,
+    member_type: FixtureMemberType,
+    enabled: bool,
+    display_name: &'static str,
+}
+
 struct PlatformFixture {
     pool: PgPool,
     tenant: Uuid,
@@ -373,9 +486,62 @@ struct PlatformFixture {
     check_unlocked: AtomicBool,
     projection_ready: Mutex<Option<tokio::sync::oneshot::Sender<i64>>>,
     organization_reads: AtomicUsize,
+    members: Mutex<Vec<FixtureMember>>,
+    member_reads: Mutex<Vec<(String, String, Option<Uuid>)>>,
+    authorization_reads: AtomicUsize,
 }
 
 impl PlatformFixture {
+    fn new(pool: PgPool) -> Self {
+        let actor = new_id();
+        Self {
+            pool,
+            tenant: new_id(),
+            actor,
+            other: new_id(),
+            parent: new_id(),
+            active: new_id(),
+            excluded: [new_id(), new_id()],
+            self_scope: AtomicBool::new(false),
+            expired: AtomicBool::new(false),
+            lease_ms: AtomicU64::new(2000),
+            check_unlocked: AtomicBool::new(true),
+            projection_ready: Mutex::new(None),
+            organization_reads: AtomicUsize::new(0),
+            members: Mutex::new(vec![FixtureMember {
+                user: actor,
+                membership: new_id(),
+                member_type: FixtureMemberType::Employee,
+                enabled: true,
+                display_name: "Current member",
+            }]),
+            member_reads: Mutex::new(Vec::new()),
+            authorization_reads: AtomicUsize::new(0),
+        }
+    }
+
+    // This controlled HTTP peer models the platform's employee-only directory.
+    // Actual membership-type authority is verified by platform PostgreSQL tests;
+    // the stores client continues to consume the existing user-ID DTO.
+    fn employee_members(&self) -> std::collections::BTreeMap<Uuid, serde_json::Value> {
+        self.members
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|member| member.member_type == FixtureMemberType::Employee && member.enabled)
+            .map(|member| {
+                (
+                    member.user,
+                    serde_json::json!({
+                        "id":member.user,"organizationId":self.active,
+                        "displayName":member.display_name,"membershipId":member.membership,
+                        "memberType":"EMPLOYEE","private":"must not escape"
+                    }),
+                )
+            })
+            .collect()
+    }
+
     fn organization(&self) -> serde_json::Value {
         let now = chrono::Utc::now().timestamp_millis();
         let expires = if self.expired.load(Ordering::SeqCst) {
@@ -417,6 +583,20 @@ async fn platform_response(
         assert_eq!(headers["authorization"], "Basic Zml4dHVyZTpmaXh0dXJl");
         let fields: BTreeMap<_, _> = url::form_urlencoded::parse(&body).into_owned().collect();
         assert_eq!(fields.len(), 3);
+        state.authorization_reads.fetch_add(1, Ordering::SeqCst);
+        // Same account, different selected membership: the customer context
+        // cannot borrow that account's enabled employee identity or grants.
+        if fields["token"] == "customer-token" {
+            return (
+                axum::http::StatusCode::FORBIDDEN,
+                Json(json!({"code":"OPERATION_DENIED"})),
+            )
+                .into_response();
+        }
+        assert!(matches!(
+            fields["token"].as_str(),
+            "app-token" | "other-token"
+        ));
         let actor = if fields["token"] == "other-token" {
             state.other
         } else {
@@ -437,7 +617,7 @@ async fn platform_response(
             "context":{"contractVersion":"1.0","appCode":"stores","contextVersion":"a".repeat(64),
                 "expiresAt":chrono::DateTime::from_timestamp_millis(now+20_000).unwrap().to_rfc3339(),
                 "user":{"id":actor},"tenant":{"id":state.tenant},"organization":{"id":state.parent},
-                "application":{"id":"55555555-5555-4555-8555-555555555555"},
+                "application":{"id":"55555555-5555-7555-8555-555555555555"},
                 "organizationScopeIds":[state.parent,state.active,state.excluded[0],state.excluded[1]],
                 "permissions":[format!("{resource}:{action}")],
                 "dataGrants":[{"resource":resource,"action":action,"tenantId":state.tenant,
@@ -493,17 +673,55 @@ async fn platform_response(
         // B is non-STORE and C is disabled. Neither can enter a business snapshot.
         return axum::http::StatusCode::NOT_FOUND.into_response();
     }
-    if uri.path() == "/api/apps/stores/members" {
+    if uri.path().starts_with("/api/apps/stores/members") {
         let fields: BTreeMap<_, _> =
             url::form_urlencoded::parse(uri.query().unwrap_or_default().as_bytes())
                 .into_owned()
                 .collect();
-        assert_eq!(fields["resource"], "store-staff");
-        assert_eq!(fields["action"], "read");
+        assert!(matches!(
+            (fields["resource"].as_str(), fields["action"].as_str()),
+            ("store", "create" | "update") | ("store-staff", "read")
+        ));
         assert_eq!(fields["organizationId"], state.active.to_string());
+        let user = uri
+            .path()
+            .strip_prefix("/api/apps/stores/members/")
+            .map(|raw| Uuid::parse_str(raw).unwrap());
+        state.member_reads.lock().unwrap().push((
+            fields["resource"].clone(),
+            fields["action"].clone(),
+            user,
+        ));
+        let members = state.employee_members();
+        if let Some(user) = user {
+            assert_eq!(fields.len(), 3);
+            return members.get(&user).map_or_else(
+                || axum::http::StatusCode::NOT_FOUND.into_response(),
+                |record| Json(record.clone()).into_response(),
+            );
+        }
+        assert_eq!(fields.len(), 6);
         let page: u32 = fields["page"].parse().unwrap();
         let size: u32 = fields["size"].parse().unwrap();
-        return Json(json!({"records":[{"id":state.actor,"organizationId":state.active,"displayName":"Current member","private":"must not escape"}],"total":1,"page":page,"size":size})).into_response();
+        let q = fields["q"].to_lowercase();
+        let records: Vec<_> = members
+            .into_values()
+            .filter(|record| {
+                record["displayName"]
+                    .as_str()
+                    .unwrap()
+                    .to_lowercase()
+                    .contains(&q)
+            })
+            .collect();
+        let total = records.len();
+        let records: Vec<_> = records
+            .into_iter()
+            .skip(((page - 1) * size) as usize)
+            .take(size as usize)
+            .collect();
+        return Json(json!({"records":records,"total":total,"page":page,"size":size}))
+            .into_response();
     }
     panic!("unexpected fixture route");
 }
@@ -534,6 +752,7 @@ async fn platform_fixture(state: Arc<PlatformFixture>) -> (String, PlatformServe
             get(platform_response),
         )
         .route("/api/apps/stores/members", get(platform_response))
+        .route("/api/apps/stores/members/{id}", get(platform_response))
         .with_state(state);
     if test_http::NodePeer::enabled() {
         let node = test_http::NodePeer::router(app);
@@ -589,28 +808,23 @@ async fn api_call(
 async fn platform_store_snapshot_guards_legacy_http_reads_and_writes() {
     use serde_json::json;
     owned(|pool| async move {
-        initialize_v1(&pool).await;
+        initialize_through(&pool, 1).await;
         let api_pool = PgPoolOptions::new().max_connections(1).acquire_timeout(Duration::from_secs(2))
             .after_connect(|connection, _| Box::pin(async move {
                 sqlx::query("SELECT pg_catalog.set_config('search_path','pg_catalog,public,pg_temp',false)")
                     .execute(connection).await?;
                 Ok(())
             })).connect_with((*pool.connect_options()).clone()).await.unwrap();
-        let state = Arc::new(PlatformFixture {
-            pool: api_pool.clone(), tenant: Uuid::new_v4(), actor: Uuid::new_v4(), other: Uuid::new_v4(),
-            parent: Uuid::new_v4(), active: Uuid::new_v4(), excluded: [Uuid::new_v4(), Uuid::new_v4()],
-            self_scope: AtomicBool::new(false), expired: AtomicBool::new(false), organization_reads: AtomicUsize::new(0),
-            lease_ms: AtomicU64::new(2000), check_unlocked: AtomicBool::new(true), projection_ready: Mutex::new(None),
-        });
-        let profiles = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
-        let reports = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+        let state = Arc::new(PlatformFixture::new(api_pool.clone()));
+        let profiles = [new_id(), new_id(), new_id()];
+        let reports = [new_id(), new_id(), new_id()];
         for (index, organization) in [state.active, state.excluded[0], state.excluded[1]].into_iter().enumerate() {
             sqlx::query("INSERT INTO stores(id,tenant_id,organization_id,owner_user_id,name,business_status,business_contact) VALUES($1,$2,$3,$4,$5,'OPEN','Legacy contact')")
                 .bind(profiles[index]).bind(state.tenant).bind(organization).bind(state.actor).bind(format!("Legacy {index}")).execute(&pool).await.unwrap();
             sqlx::query("INSERT INTO store_daily_reports(id,tenant_id,store_id,organization_id,owner_user_id,business_date,amount) VALUES($1,$2,$3,$4,$5,DATE '2026-10-20',$6::numeric)")
                 .bind(reports[index]).bind(state.tenant).bind(profiles[index]).bind(organization).bind(state.actor).bind(format!("{}.00", (index+1)*10)).execute(&pool).await.unwrap();
         }
-        let other_report = Uuid::new_v4();
+        let other_report = new_id();
         sqlx::query("INSERT INTO store_daily_reports(id,tenant_id,store_id,organization_id,owner_user_id,business_date,amount) VALUES($1,$2,$3,$4,$5,DATE '2026-10-21',40)")
             .bind(other_report).bind(state.tenant).bind(profiles[0]).bind(state.active).bind(state.other).execute(&pool).await.unwrap();
         initialize_database(&pool).await.unwrap();
@@ -622,6 +836,27 @@ async fn platform_store_snapshot_guards_legacy_http_reads_and_writes() {
             ("PLATFORM_AUTHORIZATION_MODE", "combined"),
         ]).unwrap();
         let app = stores_api::application(&config, api_pool.clone()).unwrap();
+        let before_invalid = business_snapshot(&pool).await;
+        for raw in [
+            "11111111-1111-4111-8111-111111111111", // Intentional legacy v4 negative fixture.
+            "11111111-1111-7111-c111-111111111111", // Wrong variant despite v7.
+            "not-a-uuid",
+        ] {
+            for path in [
+                format!("/stores-api/stores/{raw}"),
+                format!("/stores-api/daily-reports/{raw}"),
+                format!("/stores-api/daily-reports/summary?dateFrom=2026-10-01&dateTo=2026-10-31&storeId={raw}"),
+            ] {
+                let (status, error) = api_call(&app, "GET", &path, None, "app-token").await;
+                assert_eq!(status, 400, "{path}: {error}");
+            }
+            let (status, error) = api_call(&app, "POST", "/stores-api/stores", Some(json!({"organizationId":raw,"businessStatus":"OPEN","businessContact":""})), "app-token").await;
+            assert_eq!(status, 400, "{error}");
+            let (status, error) = api_call(&app, "PATCH", &format!("/stores-api/stores/{}", profiles[0]), Some(json!({"version":1,"managerUserId":raw})), "app-token").await;
+            assert_eq!(status, 400, "{error}");
+        }
+        assert_eq!(business_snapshot(&pool).await, before_invalid);
+        check("http_paths_dtos_and_optional_id_filters_reject_v4_variant_and_malformed_ids");
         let (status, list) = api_call(&app, "GET", "/stores-api/stores", None, "app-token").await;
         assert_eq!(status, 200, "{list}");
         assert_eq!(list["total"], 1);
@@ -737,5 +972,258 @@ async fn platform_store_snapshot_guards_legacy_http_reads_and_writes() {
         state.lease_ms.store(2000, Ordering::SeqCst);
         api_pool.close().await;
         check("organization_lease_expires_during_confirmed_row_lock_and_rolls_back");
+    }).await;
+}
+
+#[tokio::test]
+#[ignore = "requires the owned CI PostgreSQL driver"]
+async fn employee_member_candidates_and_manager_writes_preserve_the_user_id_contract() {
+    use serde_json::json;
+    use std::collections::BTreeSet;
+
+    owned(|pool| async move {
+        initialize_database(&pool).await.unwrap();
+        let api_pool = PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(Duration::from_secs(2))
+            .connect_with((*pool.connect_options()).clone())
+            .await
+            .unwrap();
+        let state = Arc::new(PlatformFixture::new(api_pool.clone()));
+        let dual_user = new_id();
+        let customer_only = new_id();
+        let disabled_employee = new_id();
+        let dual_employee_membership = new_id();
+        let customer_membership = new_id();
+        let actor_customer_membership = new_id();
+        let dual_customer_membership = new_id();
+        let disabled_membership = new_id();
+        state.members.lock().unwrap().extend([
+            FixtureMember {
+                user: state.actor,
+                membership: actor_customer_membership,
+                member_type: FixtureMemberType::Customer,
+                enabled: true,
+                display_name: "Actor customer",
+            },
+            FixtureMember {
+                user: dual_user,
+                membership: dual_employee_membership,
+                member_type: FixtureMemberType::Employee,
+                enabled: true,
+                display_name: "Dual employee",
+            },
+            FixtureMember {
+                user: dual_user,
+                membership: dual_customer_membership,
+                member_type: FixtureMemberType::Customer,
+                enabled: true,
+                display_name: "Dual customer",
+            },
+            FixtureMember {
+                user: customer_only,
+                membership: customer_membership,
+                member_type: FixtureMemberType::Customer,
+                enabled: true,
+                display_name: "Customer only",
+            },
+            FixtureMember {
+                user: disabled_employee,
+                membership: disabled_membership,
+                member_type: FixtureMemberType::Employee,
+                enabled: false,
+                display_name: "Disabled employee",
+            },
+            FixtureMember {
+                user: disabled_employee,
+                membership: new_id(),
+                member_type: FixtureMemberType::Customer,
+                enabled: true,
+                display_name: "Disabled employee's enabled customer",
+            },
+        ]);
+        let (origin, _server) = platform_fixture(state.clone()).await;
+        let config = stores_api::Config::from_pairs([
+            ("STORES_DATABASE_URL", "postgresql://fixture:fixture@127.0.0.1/stores"),
+            ("STORES_ALLOWED_ORIGINS", "https://platform.example.test"),
+            ("PLATFORM_API_ORIGIN", &origin),
+            ("PLATFORM_CLIENT_ID", "fixture"),
+            ("PLATFORM_CLIENT_SECRET", "fixture"),
+            ("PLATFORM_AUTHORIZATION_MODE", "combined"),
+        ]).unwrap();
+        let app = stores_api::application(&config, api_pool.clone()).unwrap();
+
+        for (resource, action) in [("store", "create"), ("store", "update"), ("store-staff", "read")] {
+            let mut returned = BTreeSet::new();
+            for page in 1..=3 {
+                let path = format!("/stores-api/members?resource={resource}&action={action}&organizationId={}&page={page}&size=1", state.active);
+                let (status, candidates) = api_call(&app, "GET", &path, None, "app-token").await;
+                assert_eq!(status, 200, "{path}: {candidates}");
+                assert_eq!(candidates["total"], 2, "only enabled employee users count");
+                assert_eq!(candidates["page"], page);
+                assert_eq!(candidates["size"], 1);
+                let records = candidates["records"].as_array().unwrap();
+                assert_eq!(records.len(), usize::from(page <= 2));
+                for record in records {
+                    assert_eq!(record.as_object().unwrap().len(), 3, "keep the legacy member DTO");
+                    assert_eq!(record["organizationId"], state.active.to_string());
+                    returned.insert(Uuid::parse_str(record["id"].as_str().unwrap()).unwrap());
+                }
+            }
+            assert_eq!(returned, BTreeSet::from([state.actor, dual_user]));
+        }
+        assert_eq!(state.member_reads.lock().unwrap().len(), 9);
+        check("three_member_lookup_purposes_keep_user_ids_and_employee_only_pages_and_totals");
+
+        // Neither an eligible user's membership ID nor a customer's account or
+        // membership ID is a user-ID target, even if copied from another API.
+        let invalid_targets = [
+            customer_only,
+            disabled_employee,
+            customer_membership,
+            actor_customer_membership,
+            dual_employee_membership,
+            dual_customer_membership,
+            disabled_membership,
+        ];
+        let before = business_snapshot(&pool).await;
+        for target in invalid_targets {
+            let (status, error) = api_call(&app, "POST", "/stores-api/stores", Some(json!({
+                "organizationId":state.active,"businessStatus":"OPEN",
+                "businessContact":"Rejected contact","managerUserId":target,
+            })), "app-token").await;
+            assert_eq!(status, 404, "{target}: {error}");
+            assert_eq!(error["code"], "MEMBER_NOT_FOUND");
+            assert_eq!(state.member_reads.lock().unwrap().last(), Some(&("store".into(), "create".into(), Some(target))));
+        }
+        assert_eq!(business_snapshot(&pool).await, before);
+        let (status, created) = api_call(&app, "POST", "/stores-api/stores", Some(json!({
+            "organizationId":state.active,"businessStatus":"OPEN",
+            "businessContact":"Employee contact","managerUserId":dual_user,
+        })), "app-token").await;
+        assert_eq!(status, 201, "{created}");
+        assert_eq!(created["managerUserId"], dual_user.to_string());
+        assert_eq!(created["managerDisplayName"], "Dual employee");
+        assert_eq!(created["version"], 1);
+        let profile = created["id"].as_str().unwrap();
+        let profile_path = format!("/stores-api/stores/{profile}");
+        let staff_path = format!("{profile_path}/staff");
+        let (status, staff) = api_call(&app, "GET", &format!("{staff_path}?page=1&size=20"), None, "app-token").await;
+        assert_eq!(status, 200, "{staff}");
+        assert_eq!(staff["total"], 2);
+        let staff_ids: BTreeSet<_> = staff["records"].as_array().unwrap().iter().map(|record| {
+            assert_eq!(record.as_object().unwrap().len(), 3);
+            assert_eq!(record["organizationId"], state.active.to_string());
+            Uuid::parse_str(record["id"].as_str().unwrap()).unwrap()
+        }).collect();
+        assert_eq!(staff_ids, BTreeSet::from([state.actor, dual_user]));
+        check("manager_create_revalidates_user_target_and_staff_get_consumes_employee_directory");
+
+        let mut blocked_requests = vec![
+            ("GET", staff_path.clone(), None),
+            ("POST", "/stores-api/stores".into(), Some(json!({
+                "organizationId":state.active,"businessStatus":"OPEN","businessContact":"",
+                "managerUserId":dual_user,
+            }))),
+            ("PATCH", profile_path.clone(), Some(json!({"version":1,"managerUserId":dual_user}))),
+        ];
+        for (resource, action) in [("store", "create"), ("store", "update"), ("store-staff", "read")] {
+            blocked_requests.push(("GET", format!("/stores-api/members?resource={resource}&action={action}&organizationId={}", state.active), None));
+        }
+        let before = business_snapshot(&pool).await;
+        let organization_reads = state.organization_reads.load(Ordering::SeqCst);
+        let member_reads = state.member_reads.lock().unwrap().len();
+        let authorization_reads = state.authorization_reads.load(Ordering::SeqCst);
+        let blocked_count = blocked_requests.len();
+        for (method, path, body) in blocked_requests {
+            let (status, error) = api_call(&app, method, &path, body, "customer-token").await;
+            assert_eq!(status, 403, "{method} {path}: {error}");
+            assert_eq!(error["code"], "OPERATION_DENIED");
+        }
+        assert_eq!(state.authorization_reads.load(Ordering::SeqCst), authorization_reads + blocked_count);
+        assert_eq!(state.organization_reads.load(Ordering::SeqCst), organization_reads);
+        assert_eq!(state.member_reads.lock().unwrap().len(), member_reads);
+        assert_eq!(business_snapshot(&pool).await, before);
+        check("customer_actor_with_same_account_employee_is_denied_before_directory_or_business_access");
+
+        let before = business_snapshot(&pool).await;
+        for target in invalid_targets {
+            let (status, error) = api_call(&app, "PATCH", &profile_path, Some(json!({
+                "version":1,"managerUserId":target,
+            })), "app-token").await;
+            assert_eq!(status, 404, "{target}: {error}");
+            assert_eq!(error["code"], "MEMBER_NOT_FOUND");
+            assert_eq!(state.member_reads.lock().unwrap().last(), Some(&("store".into(), "update".into(), Some(target))));
+        }
+        assert_eq!(business_snapshot(&pool).await, before);
+        let (status, updated) = api_call(&app, "PATCH", &profile_path, Some(json!({
+            "version":1,"managerUserId":state.actor,
+        })), "app-token").await;
+        assert_eq!(status, 200, "{updated}");
+        assert_eq!(updated["managerUserId"], state.actor.to_string());
+        assert_eq!(updated["managerDisplayName"], "Current member");
+        let (status, updated) = api_call(&app, "PATCH", &profile_path, Some(json!({
+            "version":2,"managerUserId":dual_user,
+        })), "app-token").await;
+        assert_eq!(status, 200, "{updated}");
+        assert_eq!(updated["managerUserId"], dual_user.to_string());
+        assert_eq!(updated["managerDisplayName"], "Dual employee");
+        assert_eq!(updated["version"], 3);
+
+        state.members.lock().unwrap().iter_mut()
+            .find(|member| member.membership == dual_employee_membership).unwrap().enabled = false;
+        let before = business_snapshot(&pool).await;
+        for body in [
+            json!({"version":3,"businessContact":"Retained stale manager"}),
+            json!({"version":3,"managerUserId":dual_user}),
+            json!({"version":3,"managerUserId":disabled_employee}),
+        ] {
+            let (status, error) = api_call(&app, "PATCH", &profile_path, Some(body), "app-token").await;
+            assert_eq!(status, 404, "{error}");
+            assert_eq!(error["code"], "MEMBER_NOT_FOUND");
+        }
+        assert_eq!(business_snapshot(&pool).await, before,
+            "omitted, same-ID and replacement managers must not bypass current employee qualification");
+        for (resource, action) in [("store", "create"), ("store", "update"), ("store-staff", "read")] {
+            let path = format!("/stores-api/members?resource={resource}&action={action}&organizationId={}", state.active);
+            let (status, candidates) = api_call(&app, "GET", &path, None, "app-token").await;
+            assert_eq!(status, 200, "{candidates}");
+            assert_eq!(candidates["total"], 1);
+            assert_eq!(candidates["records"], json!([{"id":state.actor,"organizationId":state.active,"displayName":"Current member"}]));
+        }
+        let (status, staff) = api_call(&app, "GET", &staff_path, None, "app-token").await;
+        assert_eq!(status, 200, "{staff}");
+        assert_eq!(staff["total"], 1);
+        assert_eq!(staff["records"], json!([{"id":state.actor,"organizationId":state.active,"displayName":"Current member"}]));
+        let (status, cleared) = api_call(&app, "PATCH", &profile_path, Some(json!({
+            "version":3,"managerUserId":null,"businessContact":"Explicitly cleared",
+        })), "app-token").await;
+        assert_eq!(status, 200, "{cleared}");
+        assert_eq!(cleared["version"], 4);
+        assert!(cleared["managerUserId"].is_null());
+        assert!(cleared["managerDisplayName"].is_null());
+        check("manager_update_rejects_customer_member_ids_disabled_and_retained_stale_targets_but_allows_clear");
+
+        let before = business_snapshot(&pool).await;
+        let organization_reads = state.organization_reads.load(Ordering::SeqCst);
+        let member_reads = state.member_reads.lock().unwrap().len();
+        let authorization_reads = state.authorization_reads.load(Ordering::SeqCst);
+        for (method, path, body) in [
+            ("POST", staff_path, Some(json!({"userId":state.actor,"displayName":"No local assignment"}))),
+            ("DELETE", format!("{profile_path}/staff/{}", new_id()), None),
+        ] {
+            let (status, error) = api_call(&app, method, &path, body.clone(), "app-token").await;
+            assert_eq!(status, 410, "{method} {path}: {error}");
+            assert_eq!(error["code"], "PLATFORM_MEMBERSHIP_MANAGED");
+            let (status, error) = api_call(&app, method, &path, body, "customer-token").await;
+            assert_eq!(status, 403, "{method} {path}: {error}");
+            assert_eq!(error["code"], "OPERATION_DENIED");
+        }
+        assert_eq!(state.authorization_reads.load(Ordering::SeqCst), authorization_reads + 4);
+        assert_eq!(state.organization_reads.load(Ordering::SeqCst), organization_reads);
+        assert_eq!(state.member_reads.lock().unwrap().len(), member_reads);
+        assert_eq!(business_snapshot(&pool).await, before);
+        check("retired_staff_writes_authorize_employee_then_return_410_and_deny_customer_without_writes");
+        api_pool.close().await;
     }).await;
 }

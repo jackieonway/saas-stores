@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { BusinessError, StoresClient } from '../src/client.ts'
+import { validUUID } from '../src/uuid.ts'
 import { context, grantContext, baseRow, store, staff, report, member, page, response, deferred,
   tenant, organization, outside, user, storeId, staffId, reportId, memberId, id } from './domain.fixture.mjs'
 
@@ -9,6 +10,30 @@ const clientWith = (fetchImpl, props = context(), options = {}) => {
 }
 const failure = (status, code) => response({ code, message: 'SECRET upstream-token=never-display' }, status)
 const rejection = promise => Promise.resolve(promise).then(() => { throw new Error('Expected a rejection') }, error => error)
+
+test('transport replaces frozen-SDK UUIDv4 traces and never stores an echoed non-v7 request ID', async () => {
+  let sent
+  const client = clientWith(async (_, init) => {
+    sent = new Headers(init.headers).get('X-Request-Id')
+    return response({ code: 'DATABASE_ERROR' }, 503, { 'X-Request-Id': '0199fe00-0000-4000-8000-000000000001' })
+  })
+  await assert.rejects(client.listStores(), error => error.requestId === sent && validUUID(error.requestId))
+  assert.equal(validUUID(sent), true)
+  client.dispose()
+})
+
+test('legacy and invalid-variant resource UUIDs fail before transport and cannot enter a successful DTO', async () => {
+  const legacy = '0199fe00-0000-4000-8000-000000000001'
+  const wrongVariant = '0199fe00-0000-7000-c000-000000000001'
+  let sent = 0
+  const client = clientWith(async () => { sent++; return response({ ...store, id: legacy }) })
+  for (const invalid of [legacy, wrongVariant, '00000000-0000-0000-0000-000000000000']) {
+    assert.throws(() => client.getStore(invalid), error => error instanceof BusinessError && error.status === 400)
+  }
+  assert.equal(sent, 0)
+  await assert.rejects(client.getStore(storeId), error => error.kind === 'PROTOCOL')
+  client.dispose()
+})
 
 test('all actual HTTP methods use current Bearer, omit cookies and preserve wire decimal/date values', async t => {
   const cases = [

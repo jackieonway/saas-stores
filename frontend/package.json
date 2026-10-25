@@ -20,7 +20,8 @@
   },
   "dependencies": {
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "uuid": "13.0.0"
   },
   "devDependencies": {
     "@types/react": "19.3.0",

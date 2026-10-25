@@ -3,7 +3,7 @@
 //! Identity and authorization are obtained through the platform's bounded HTTP
 //! protocol. This crate owns only its separate business database and does not
 //! depend on platform or work-order implementation crates. Startup initializes
-//! and verifies the schema before binding a listener. Public errors contain
+//! or verifies the schema before binding a listener. Public errors contain
 //! fixed safe categories, and no environment file is loaded automatically.
 
 mod authorization;
@@ -12,6 +12,8 @@ mod directory;
 mod domain;
 mod error;
 mod http;
+mod imported_database;
+mod migration_cli;
 mod migrations;
 mod reports;
 mod staff;
@@ -27,6 +29,7 @@ use error::ServiceFailure;
 pub use config::Config;
 pub use error::{ConfigError, ServiceError};
 pub use http::{application, router};
+pub use migration_cli::{run_migration_command, MigrationCommandError};
 
 /// Initialize or verify the independent store schema transactionally.
 ///
@@ -77,7 +80,15 @@ pub async fn run(config: Config) -> Result<(), ServiceError> {
     let (pool, authorizer) = tokio::time::timeout(config.startup_timeout, async {
         let authorizer = authorization::Authorizer::new(&config)?;
         let pool = connect_database(&config).await?;
-        if let Err(error) = initialize_database(&pool).await {
+        let initialized = match &config.database_initialization {
+            imported_database::DatabaseInitialization::Initialize => {
+                initialize_database(&pool).await
+            }
+            imported_database::DatabaseInitialization::Imported(receipt) => {
+                imported_database::verify(&pool, receipt).await
+            }
+        };
+        if let Err(error) = initialized {
             pool.close().await;
             return Err(error);
         }

@@ -1,3 +1,4 @@
+import { newId } from './uuid.ts'
 import {
   SDK_VERSION, MicroSdkError, requestWithContext, authorizationContextSignature, assertSupportedSdkVersion,
 } from './sdk.ts'
@@ -319,8 +320,10 @@ export class StoresClient {
       const fetchRequest = this.fetchImpl
       const transport: typeof fetch = async (url, init) => {
         check(); sent = true
-        requestId = new Headers(init?.headers).get('X-Request-Id') ?? undefined
-        const response = await fetchRequest(url, { ...init, redirect: 'error', cache: 'no-store' })
+        const headers = new Headers(init?.headers)
+        if (!validUUID(headers.get('X-Request-Id'))) headers.set('X-Request-Id', newId())
+        requestId = headers.get('X-Request-Id') ?? undefined
+        const response = await fetchRequest(url, { ...init, headers, redirect: 'error', cache: 'no-store' })
         check()
         observedStatus = response?.status
         const echoed = response?.headers?.get('X-Request-Id')

@@ -18,9 +18,9 @@ use crate::authorization::tests::test_http::NodePeer;
 
 const TOKEN: &str = "APP/TOKEN+NOT_FOR_LOGS";
 const SECRET: &str = "CLIENT_SECRET_NOT_FOR_LOGS";
-const REQUEST_ID: &str = "AAAAAAAA-6666-4666-8666-666666666666";
-const ORGANIZATION: &str = "33333333-3333-4333-8333-333333333333";
-const USER: &str = "11111111-1111-4111-8111-111111111111";
+const REQUEST_ID: &str = "AAAAAAAA-6666-7666-8666-666666666666";
+const ORGANIZATION: &str = "33333333-3333-7333-8333-333333333333";
+const USER: &str = "11111111-1111-7111-8111-111111111111";
 
 #[tokio::test]
 async fn combined_transport_is_bound_bounded_and_never_falls_back() {
@@ -377,21 +377,23 @@ async fn requests_use_fixed_stores_paths_and_the_correct_basic_or_bearer_identit
 }
 
 #[tokio::test]
-async fn arbitrary_request_ids_are_omitted_instead_of_reflected_in_headers() {
+async fn arbitrary_or_legacy_request_ids_are_regenerated_as_v7_before_upstream_calls() {
     let peer = HttpPeer::start(reply(200, Some("application/json"), b"{}"));
     let client = PlatformClient::new(&peer.settings()).unwrap();
     for request_id in [
         "not-a-uuid",
         "\r\nx-private: APP_TOKEN_NOT_FOR_LOGS",
         "aaaaaaaa666646668666666666666666",
+        "aaaaaaaa-6666-4666-8666-666666666666", // Intentional v4 negative fixture.
+        "aaaaaaaa-6666-7666-c666-666666666666", // Wrong variant despite version 7.
     ] {
         call(&client, CallKind::Context, request_id).await.unwrap();
     }
     let requests = peer.captured();
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 5);
     assert!(requests
         .iter()
-        .all(|request| !request.headers.contains_key("x-request-id")));
+        .all(|request| crate::domain::uuid(&request.headers["x-request-id"]).is_ok()));
 }
 
 #[tokio::test]
@@ -553,7 +555,8 @@ async fn connection_failure_is_not_retried_and_body_reads_use_the_call_timeout()
 fn additional_ca_failures_are_bounded_and_sanitized() {
     let peer = HttpPeer::start(reply(200, Some("application/json"), b"{}"));
     let mut settings = peer.settings();
-    let path = std::env::temp_dir().join(format!("stores-private-ca-{}.pem", Uuid::new_v4()));
+    let path =
+        std::env::temp_dir().join(format!("stores-private-ca-{}.pem", crate::domain::new_id()));
     settings.ca_cert_file = Some(path.clone());
     for bytes in [
         None,

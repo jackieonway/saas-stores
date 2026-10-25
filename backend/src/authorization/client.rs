@@ -275,13 +275,11 @@ impl PlatformClient {
         request_id: &str,
         kind: ResponseKind,
     ) -> Result<Value, ApiError> {
-        // Reflect only a canonical UUID, never arbitrary client text or control
-        // characters, into upstream metadata or request-building diagnostics.
-        if request_id.len() == 36 {
-            if let Ok(id) = Uuid::parse_str(request_id) {
-                request = request.header("x-request-id", id.to_string());
-            }
-        }
+        // External correlation metadata is regenerated if it is not canonical
+        // UUID v7, matching the inbound HTTP metadata contract.
+        let request_id =
+            crate::domain::uuid(request_id).unwrap_or_else(|_| crate::domain::new_id());
+        request = request.header("x-request-id", request_id.to_string());
         let mut response = request
             .header(ACCEPT, "application/json")
             .send()

@@ -16,7 +16,7 @@ export function verifyReleaseMetadata(info, expectedVersion) {
   assert.equal(info?.application, 'stores', 'Release application must be stores')
   assert.equal(info.version, version, 'Release version does not match the selected immutable directory')
   assert.equal(info.runtime, 'qiankun', 'Release runtime must be qiankun')
-  assert.equal(info.sdkVersion, '2.0.0', 'Release SDK must be 2.0.0')
+  assert.equal(info.sdkVersion, '3.0.0', 'Release SDK must be 3.0.0')
   assert.equal(info.contractVersion, '2.0', 'Release context contract must be 2.0')
   assert.equal(info.entry, 'assets/micro-app.umd.js', 'Release entry must be the stores classic UMD')
   assert.deepEqual(info.dynamicChunks, [], 'Release must not contain dynamic chunks')
@@ -84,10 +84,10 @@ export function verifyUmdLifecycle(javascript) {
   assert.ok(descriptor && !descriptor.writable && !descriptor.configurable, 'Bundled SDK contract must be a readonly bootstrap property')
   const contract = descriptor.value
   assert.ok(Object.isFrozen(contract), 'Bundled SDK contract must be frozen')
-  assert.equal(contract.version, '2.0.0', 'Actual bundled SDK must be 2.0.0')
+  assert.equal(contract.version, '3.0.0', 'Actual bundled SDK must be 3.0.0')
   assert.equal(typeof contract.assertSupportedSdkVersion, 'function', 'Bundled SDK version negotiation is required')
-  assert.doesNotThrow(() => contract.assertSupportedSdkVersion('2.0.0'), 'Bundled SDK must support version 2')
-  for (const rejected of ['1.0.0', '3.0.0', undefined]) {
+  assert.doesNotThrow(() => contract.assertSupportedSdkVersion('3.0.0'), 'Bundled SDK must support version 3')
+  for (const rejected of ['1.0.0', '2.0.0', '4.0.0', undefined]) {
     assert.throws(() => contract.assertSupportedSdkVersion(rejected), error => error?.code === 'UNSUPPORTED_SDK_VERSION', 'Bundled SDK must reject unsupported versions')
   }
 }

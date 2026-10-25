@@ -4,7 +4,7 @@
 
 ## 架构与职责
 
-宿主在 `/micro/stores` 以 HTML / TRUSTED 模式挂载应用。静态入口是 classic UMD，导出 bootstrap、mount、update、unmount；SDK 2.0.0 使用 MicroProps 2.0，经 props.platform 传递身份、组织、路由、主题和权限。源码不再提供 iframe 桥接入口。React / ReactDOM 随应用独立打包，样式限定在 `[data-stores-root]`。
+宿主在 `/micro/stores` 以 HTML / TRUSTED 模式挂载应用。静态入口是 classic UMD，导出 bootstrap、mount、update、unmount；SDK 3.0.0 使用 MicroProps 2.0，经 props.platform 传递身份、组织、路由、主题和权限。源码不再提供 iframe 桥接入口。React / ReactDOM 随应用独立打包，样式限定在 `[data-stores-root]`。
 
 浏览器使用 stores 应用 Bearer 请求 `/stores-api`。API 每次向平台重新获取身份、当前动作授权和有效 STORE 投影，将租户、组织硬边界、数据范围及业务 owner 写入 SQL 条件。前端按钮权限只控制界面；服务端独立执行业务授权。数据库和机密客户端凭据只注入后端。
 
@@ -41,7 +41,7 @@
 
 前端固定 Node 24.22.1、npm 11.16.0、React / ReactDOM 19.3.0、TypeScript 5.9.3、Vite 8.3.4，后端使用 Rust 1.97.0。先核对实际 PATH 命中的版本，再按开发指南执行检查。
 
-新构建必须使用新版本 URL。发布门禁核对 HTML、资源摘要、实际 UMD 四个生命周期以及冻结的 bootstrap.sdkContract 版本协商；SDK2 元数据不能掩盖旧 SDK 或空生命周期壳。安装使用排他目录和文件复制，最后写 release-complete.json，已有版本即使为空也不能覆盖，未完成版本不能启动。
+新构建必须使用新版本 URL。发布门禁核对 HTML、资源摘要、实际 UMD 四个生命周期以及冻结的 bootstrap.sdkContract 版本协商；SDK3 元数据不能掩盖旧 SDK 或空生命周期壳。安装使用排他目录和文件复制，最后写 release-complete.json，已有版本即使为空也不能覆盖，未完成版本不能启动。
 
 artifacts 中 1.0.0、1.0.1 为旧 iframe 发布；后续 qiankun 候选也按历史字节保留。当前源码改变后需重新构建新版本，并核对来源输入摘要；过去的测试、候选版本或截图不能证明当前平台激活状态。记录实际登记的 HTML / TRUSTED 入口与激活版本，再做浏览器挂载和业务验收。
 

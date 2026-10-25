@@ -1,4 +1,7 @@
 import type { MicroProps } from './sdk.ts'
+import { validUUID } from './uuid.ts'
+
+export { validUUID }
 
 export const APP_CODE = 'stores'
 export type Props = MicroProps
@@ -32,9 +35,6 @@ export interface Page<T> { records: T[]; total: number; page: number; size: numb
 export interface OrganizationPage extends Page<StoreOrganization> { contractVersion: '1.0'; contextVersion: string; expiresAt: string }
 export interface Summary { count: number; totalAmount: DecimalAmount; dateFrom: BusinessDate; dateTo: BusinessDate; storeId: UUID | null }
 
-export const validUUID = (value: unknown): value is UUID => typeof value === 'string' &&
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) &&
-  value !== '00000000-0000-0000-0000-000000000000'
 export function validBusinessDate(value: unknown): value is BusinessDate {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
   const [year, month, day] = value.split('-').map(Number)
@@ -61,7 +61,7 @@ const includes = (values: string[], id: string) => values.some(value => equal(va
 export function validContext(props: unknown, now = Date.now()): props is Props {
   if (!object(props)) return false
   const signal = props.signal as AbortSignal | undefined
-  return props.contractVersion === '2.0' && (props.sdkVersion === undefined || props.sdkVersion === '2.0.0') &&
+  return props.contractVersion === '2.0' && (props.sdkVersion === undefined || props.sdkVersion === '3.0.0') &&
     props.appCode === APP_CODE && props.basePath === '/micro/stores' &&
     Number.isSafeInteger(props.contextEpoch) && (props.contextEpoch as number) > 0 &&
     typeof props.contextVersion === 'string' && props.contextVersion.length > 0 &&

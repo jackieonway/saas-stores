@@ -272,7 +272,7 @@ async fn audit(
          (id,tenant_id,organization_id,actor_user_id,resource_code,action_code,entity_id,request_id) \
          VALUES($1,$2,$3,$4,'store-daily-report',$5,$6,$7)",
     )
-    .bind(Uuid::new_v4())
+    .bind(crate::domain::new_id())
     .bind(call.auth.tenant_id())
     .bind(organization_id)
     .bind(call.auth.user_id())
@@ -395,7 +395,7 @@ pub(crate) async fn create(
     call.auth.require_organization(organization_id)?;
     call.auth
         .require_row(organization_id, call.auth.user_id())?;
-    let id = Uuid::new_v4();
+    let id = crate::domain::new_id();
     let mut insert = QueryBuilder::new(
         "INSERT INTO public.store_daily_reports\
          (id,tenant_id,store_id,organization_id,owner_user_id,business_date,amount,note) SELECT ",
@@ -697,8 +697,21 @@ mod tests {
             (query.page, query.size, query.offset),
             (1_000_000, 50, 49_999_950)
         );
-        let query = ReportQuery::parse(Some("dateFrom=2026-10-01&dateTo=2026-10-31&storeId=00112233-4455-6677-8899-aabbccddeeff"), true).unwrap();
+        let query = ReportQuery::parse(Some("dateFrom=2026-10-01&dateTo=2026-10-31&storeId=00112233-4455-7677-8899-aabbccddeeff"), true).unwrap();
         assert!(query.store_id.is_some());
+        for raw in [
+            "00112233-4455-4677-8899-aabbccddeeff", // Intentional legacy v4 negative fixture.
+            "00112233-4455-7677-c899-aabbccddeeff", // Wrong variant.
+            "not-a-uuid",
+        ] {
+            assert!(ReportQuery::parse(
+                Some(&format!(
+                    "dateFrom=2026-10-01&dateTo=2026-10-31&storeId={raw}"
+                )),
+                true
+            )
+            .is_err());
+        }
         for raw in [
             "dateFrom=2026-10-19&dateTo=2026-10-18",
             "dateFrom=2026-02-29",
@@ -732,7 +745,7 @@ mod tests {
             assert!(ReportQuery::parse(raw, true).is_err(), "{raw:?}");
         }
         assert!(
-            ReportQuery::parse(Some("storeId=00112233-4455-6677-8899-aabbccddeeff"), false)
+            ReportQuery::parse(Some("storeId=00112233-4455-7677-8899-aabbccddeeff"), false)
                 .is_err()
         );
     }

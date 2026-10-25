@@ -4,9 +4,22 @@ import { can, canMemberLookup, canOrganizationLookup, canRoute, routeView, ident
   validUUID, validBusinessDate, validAmount, normalizeAmount, shanghaiToday } from '../src/domain.ts'
 import { context, grantContext, operations, baseRow, id, user, tenant, organization, child, outside, staff } from './domain.fixture.mjs'
 
-test('SDK 2 contexts remain valid and legacy SDK contexts are rejected', () => {
+test('typed UUID boundaries reject nil, legacy versions and non-RFC variants', () => {
+  for (const invalid of ['00000000-0000-0000-0000-000000000000',
+    '0199fe00-0000-4000-8000-000000000001', // explicit legacy UUIDv4 negative
+    '0199fe00-0000-7000-0000-000000000001', '0199fe00-0000-7000-c000-000000000001',
+    '0199fe00-0000-7000-f000-000000000001']) {
+    assert.equal(validUUID(invalid), false)
+    for (const kind of ['user', 'tenant', 'organization']) assert.equal(validContext(context({ [kind]: { id: invalid } })), false)
+    assert.equal(validContext(context({ organizationScopeIds: [organization, invalid] })), false)
+  }
+  assert.equal(validUUID(id(1).toUpperCase()), true)
+})
+
+test('SDK 3 contexts remain valid and prior SDK contexts are rejected', () => {
   assert.equal(validContext(context()), true)
   assert.equal(validContext({ ...context(), sdkVersion: '1.0.0' }), false)
+  assert.equal(validContext({ ...context(), sdkVersion: '2.0.0' }), false)
 })
 
 test('all seven active operation pairs require their own permission and a unique identity-bound grant', () => {

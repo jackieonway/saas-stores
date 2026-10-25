@@ -204,7 +204,7 @@ async fn dispatch(
         .extensions()
         .get::<RequestId>()
         .map(|id| id.0.clone())
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
+        .unwrap_or_else(|| crate::domain::new_id().to_string());
     // Authorize before parsing business input or acquiring a business connection.
     let mut auth = authorizer
         .authorize(&token, resource, action, &request_id)
@@ -438,15 +438,11 @@ fn canonical_request_id(headers: &HeaderMap) -> String {
     let mut values = headers.get_all("x-request-id").iter();
     let first = values.next().and_then(|value| value.to_str().ok());
     if values.next().is_none() {
-        if let Some(value) = first.filter(|value| value.len() == 36) {
-            if let Ok(id) = Uuid::parse_str(value) {
-                if !id.is_nil() && id.hyphenated().to_string().eq_ignore_ascii_case(value) {
-                    return id.hyphenated().to_string();
-                }
-            }
+        if let Some(id) = first.and_then(|raw| crate::domain::uuid(raw).ok()) {
+            return id.to_string();
         }
     }
-    Uuid::new_v4().to_string()
+    crate::domain::new_id().to_string()
 }
 
 async fn request_metadata(
@@ -620,7 +616,7 @@ mod tests {
         assert!(!response
             .headers()
             .contains_key("access-control-allow-credentials"));
-        assert!(Uuid::parse_str(response.headers()["x-request-id"].to_str().unwrap()).is_ok());
+        assert!(crate::domain::uuid(response.headers()["x-request-id"].to_str().unwrap()).is_ok());
     }
 
     #[tokio::test]
@@ -712,7 +708,7 @@ mod tests {
 
     #[test]
     fn request_identifiers_are_non_nil_and_not_ambiguous() {
-        let valid = "8c35987c-d35a-43fd-9d0b-54ba6bf09801";
+        let valid = "8c35987c-d35a-73fd-9d0b-54ba6bf09801";
         let mut headers = HeaderMap::new();
         headers.insert("x-request-id", HeaderValue::from_static(valid));
         assert_eq!(canonical_request_id(&headers), valid);
@@ -720,6 +716,8 @@ mod tests {
         assert_ne!(canonical_request_id(&headers), valid);
         for value in [
             "00000000-0000-0000-0000-000000000000",
+            "8c35987c-d35a-43fd-9d0b-54ba6bf09801", // Intentional legacy v4 metadata.
+            "8c35987c-d35a-73fd-cd0b-54ba6bf09801", // Wrong variant despite v7.
             "8c35987cd35a43fd9d0b54ba6bf09801",
             "unsafe-input",
         ] {
@@ -727,7 +725,7 @@ mod tests {
             headers.insert("x-request-id", HeaderValue::from_str(value).unwrap());
             let actual = canonical_request_id(&headers);
             assert_ne!(actual, value);
-            assert!(!Uuid::parse_str(&actual).unwrap().is_nil());
+            assert!(crate::domain::uuid(&actual).is_ok());
         }
     }
 

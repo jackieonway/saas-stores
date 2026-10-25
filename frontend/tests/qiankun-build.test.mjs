@@ -46,7 +46,7 @@ test('qiankun release is a classic UMD lifecycle with complete relative CSS and 
   assert.equal(latestSetProp, 'StoresMicroApp')
   assert.notEqual(proxy['stores-runtime-random-name'], proxy[latestSetProp])
   assert.deepEqual(Object.keys(proxy[latestSetProp]).sort(), ['bootstrap', 'mount', 'unmount', 'update'])
-  assert.equal(proxy.StoresMicroApp.bootstrap.sdkContract.version, '2.0.0')
+  assert.equal(proxy.StoresMicroApp.bootstrap.sdkContract.version, '3.0.0')
   assert.throws(() => proxy.StoresMicroApp.bootstrap.sdkContract.assertSupportedSdkVersion('1.0.0'), error => error.code === 'UNSUPPORTED_SDK_VERSION')
 
   const prefix = '/micro-proxy/stores/versions/test/'
@@ -115,7 +115,7 @@ test('release tools require an explicit version and reject retained iframe histo
   assert.throws(() => verifyUmdLifecycle('window.StoresMicroApp = { bootstrap() {}, mount() {}, update() {}, unmount() {} };'), /SDK contract/)
   const shell = `const bootstrap = Object.defineProperty(function(){}, 'sdkContract', { value: Object.freeze({ version: '1.0.0', assertSupportedSdkVersion() {} }) }); window.StoresMicroApp = { bootstrap, mount(){}, update(){}, unmount(){} };`
   assert.throws(() => verifyUmdLifecycle(shell), /Actual bundled SDK/)
-  assert.throws(() => verifyUmdLifecycle(shell.replace("version: '1.0.0'", "version: '2.0.0'")), /reject unsupported versions/)
+  assert.throws(() => verifyUmdLifecycle(shell.replace("version: '1.0.0'", "version: '3.0.0'")), /reject unsupported versions/)
   const environment = { ...process.env }
   delete environment.STORES_RELEASE_VERSION
   const gateway = spawnSync(process.execPath, ['deploy/local/verify-gateway.mjs'], { cwd: fileURLToPath(new URL('../', import.meta.url)), env: environment, encoding: 'utf8', windowsHide: true })

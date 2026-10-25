@@ -31,13 +31,15 @@ managerUserId 表示营业联系人，不是平台组织管理者。门店 owner
 | --- | --- |
 | store/create | 为已有 STORE 初始化营业资料时选择营业联系人 |
 | store/update | 每次保存非空营业联系人时重新证明当前成员资格 |
-| store-staff/read | 只读查看该 STORE 当前平台直接成员 |
+| store-staff/read | 只读查看该 STORE 当前有效的直接员工成员 |
 
 浏览器经门店 API 的 `/members` 查询候选；后端调用平台 `/api/apps/stores/members` 与 `/members/{user}`。成员响应仅保留 id、displayName、organizationId，拒绝重复成员、错误组织与异常分页。候选不构成后续写入的永久资格证明。
 
-员工页直接显示平台成员，不再建立独立成员关系。旧 POST/DELETE staff 路由认证后返回 410 PLATFORM_MEMBERSHIP_MANAGED；新 bootstrap、默认权限及策略不包含 assign/unassign。
+平台对 actor 和 target 分别验证当前有效的员工身份。客户 context 即使与有效员工共用账号，也不能借用该员工的角色或目录；候选、分页总数和单项目标均只接受指定组织的 ENABLED EMPLOYEE。同账号同组织还有 CUSTOMER 行时，有效员工只返回一次；仅客户账号、已停用员工以及误传的 membership ID 均不能作为营业联系人。既有 id 和 managerUserId 继续表示 user ID，门店 API 不根据浏览器传入的类型判断员工资格。
 
-每次营业资料更新都校验最终非空 managerUserId，包括只改营业状态而保留联系人。已离职成员或 SELF 子 STORE 的范围外联系人返回可纠正的 MEMBER_NOT_FOUND，用户可明确清空后保存，或切换到获授权上下文。不会自动清空联系人，也不会扩大成员目录。
+员工页直接显示平台有效员工成员，不再建立独立成员关系。旧 POST/DELETE staff 路由在员工 actor 授权后返回 410 PLATFORM_MEMBERSHIP_MANAGED，客户 actor 在授权阶段拒绝；两种情况都不写本地历史关系或审计。新 bootstrap、默认权限及策略不包含 assign/unassign。
+
+初始化营业资料和每次更新都通过单项成员接口校验最终非空 managerUserId，包括只改营业状态而保留联系人、显式提交相同联系人。已离职、停用、仅有客户身份的成员或 SELF 子 STORE 的范围外联系人返回可纠正的 MEMBER_NOT_FOUND，用户可明确清空后保存，或切换到获授权上下文。不会自动清空联系人，也不会扩大成员目录。
 
 ## 时效、连接与事务
 
@@ -52,3 +54,5 @@ managerUserId 表示营业联系人，不是平台组织管理者。门店 owner
 验收需覆盖：七个组织用途、三个成员用途、非 STORE 与禁用组织历史排除、contextVersion 降权竞态、短窗口耗尽、SELF 子组织本人行与非本人行、保留无效联系人拒绝与显式清空成功、锁后版本变化、提交后结果未知。qiankun update 改变身份、组织或授权时，前端取消旧请求并隔离旧页面、候选和表单。
 
 真实 PostgreSQL 合同还验证有效组织投影在行锁等待中到期：先记录平台实际返回的 expiresAt，通过 pg_stat_activity 与 pg_blocking_pids 证明 API 的 FOR UPDATE 正在等待测试持有的行锁，且此时投影仍有效；到期后释放锁，要求返回 ORGANIZATION_VALIDATION_EXPIRED，营业字段、version、updated_at 和全部审计记录逐值保持不变。该测试复用隔离数据库，不依赖猜测性延迟推断锁竞争。
+
+`tests/postgres_contracts.rs` 的成员专项使用真实门店 PostgreSQL 和受控平台 HTTP fixture。fixture 显式模拟员工／客户及独立状态，用于验证三个目录用途、实际 staff GET、联系人创建／更新、旧 DTO 和无写入失败合同；它不构成平台成员类型权威的数据库验收。真实成员类型、同组织双身份、客户 actor 的祖先角色／超管隔离及目标 SQL 过滤，必须由平台自身的真实 PostgreSQL 测试另行通过。

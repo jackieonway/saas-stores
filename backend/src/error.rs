@@ -11,6 +11,10 @@ pub enum ConfigError {
     DatabaseUrl,
     /// Database TLS configuration contains an unsupported SSL mode.
     DatabaseTls,
+    /// API startup mode must be seed or imported; import belongs to the offline CLI.
+    DatabaseInitMode,
+    /// Import receipt fields are missing, malformed, mismatched, or misplaced.
+    ImportReceipt,
     /// The HTTP bind host is not a numeric IPv4 or IPv6 address.
     Host,
     /// The platform endpoint is not an exact trusted HTTPS origin.
@@ -34,6 +38,8 @@ impl fmt::Display for ConfigError {
             Self::AuthorizationMode => f.write_str("PLATFORM_AUTHORIZATION_MODE must be combined or legacy"),
             Self::DatabaseUrl => f.write_str("STORES_DATABASE_URL must explicitly identify the independent PostgreSQL database"),
             Self::DatabaseTls => f.write_str("database TLS configuration contains an unsupported SSL mode"),
+            Self::DatabaseInitMode => f.write_str("STORES_DATABASE_INIT_MODE must be seed or imported; import requires stores-migrate --import"),
+            Self::ImportReceipt => f.write_str("STORES imported database receipt configuration is invalid"),
             Self::Host => f.write_str("STORES_HOST must be a numeric bind address"),
             Self::PlatformOrigin => f.write_str("PLATFORM_API_ORIGIN must be an exact HTTPS origin (development permits loopback HTTP)"),
             Self::PlatformClientId => f.write_str("PLATFORM_CLIENT_ID must identify the confidential application client"),
@@ -53,6 +59,7 @@ pub(crate) enum ServiceFailure {
     PlatformClient,
     DatabaseUnavailable,
     InitializationFailed,
+    ImportedDatabaseRejected,
     StartupTimedOut,
     ListenerFailed,
     SignalFailed,
@@ -97,6 +104,9 @@ impl fmt::Display for ServiceError {
             ServiceFailure::DatabaseUnavailable => "business database connection unavailable",
             ServiceFailure::InitializationFailed => {
                 "business database baseline verification failed"
+            }
+            ServiceFailure::ImportedDatabaseRejected => {
+                "imported business database admission failed"
             }
             ServiceFailure::StartupTimedOut => "business database startup budget exhausted",
             ServiceFailure::ListenerFailed => "HTTP listener unavailable",
@@ -194,6 +204,7 @@ mod tests {
             ServiceFailure::PlatformClient,
             ServiceFailure::DatabaseUnavailable,
             ServiceFailure::InitializationFailed,
+            ServiceFailure::ImportedDatabaseRejected,
             ServiceFailure::StartupTimedOut,
             ServiceFailure::ListenerFailed,
             ServiceFailure::SignalFailed,
@@ -224,6 +235,8 @@ mod tests {
         for error in [
             ConfigError::DatabaseUrl,
             ConfigError::DatabaseTls,
+            ConfigError::DatabaseInitMode,
+            ConfigError::ImportReceipt,
             ConfigError::Host,
             ConfigError::PlatformOrigin,
             ConfigError::PlatformClientId,

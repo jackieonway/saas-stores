@@ -4,14 +4,14 @@ use super::*;
 
 fn auth(resource: Resource, action: Action, user: Uuid) -> Authorized {
     let now = policy::now_millis();
-    let tenant = Uuid::from_u128(2);
-    let org = Uuid::from_u128(3);
+    let tenant = Uuid::from_u128(0x01900000000070008000000000000000 + 2);
+    let org = Uuid::from_u128(0x01900000000070008000000000000000 + 3);
     let intro = json!({"active":true,"aud":"stores","sub":user,"tenant_id":tenant,
         "organization_id":org,"token_type":"Bearer","exp":now/1000+120});
     let context = json!({"contractVersion":"1.0","appCode":"stores","contextVersion":"a".repeat(64),
         "expiresAt":chrono::DateTime::from_timestamp_millis(now+20_000).unwrap().to_rfc3339(),
         "user":{"id":user},"tenant":{"id":tenant},"organization":{"id":org},
-        "application":{"id":Uuid::from_u128(4)},
+        "application":{"id":Uuid::from_u128(0x01900000000070008000000000000000 + 4)},
         "permissions":[format!("{}:{}",resource.as_str(),action.as_str())],
         "dataGrants":[{"resource":resource.as_str(),"action":action.as_str(),"tenantId":tenant,
         "subjectUserId":user,"scope":"ORG","organizationIds":[org]}]});
@@ -27,10 +27,10 @@ fn auth(resource: Resource, action: Action, user: Uuid) -> Authorized {
 
 #[test]
 fn member_witness_is_exactly_bound_and_deadline_does_not_renew() {
-    let user = Uuid::from_u128(1);
+    let user = Uuid::from_u128(0x01900000000070008000000000000000 + 1);
     let auth = auth(Resource::Store, Action::Create, user);
     let organization = auth.organization_id();
-    let target = Uuid::from_u128(5);
+    let target = Uuid::from_u128(0x01900000000070008000000000000000 + 5);
     let start = Instant::now();
     let witness = VerifiedMember {
         actor: user,
@@ -80,18 +80,25 @@ fn directory_purpose_and_member_wire_are_strict() {
         (Resource::Store, Action::Read, false),
         (Resource::DailyReport, Action::Create, false),
     ] {
-        let auth = auth(resource, action, Uuid::from_u128(1));
+        let auth = auth(
+            resource,
+            action,
+            Uuid::from_u128(0x01900000000070008000000000000000 + 1),
+        );
         assert_eq!(
             directory_authorized(&auth, auth.organization_id()).is_ok(),
             allowed
         );
     }
-    let org = Uuid::from_u128(3);
-    let original = json!({"id":Uuid::from_u128(5),"organizationId":org,"displayName":"成员"});
+    let org = Uuid::from_u128(0x01900000000070008000000000000000 + 3);
+    let original = json!({"id":Uuid::from_u128(0x01900000000070008000000000000000 + 5),"organizationId":org,"displayName":"成员"});
     validate_member(&original, org).unwrap();
     for (field, replacement) in [
         ("id", json!("invalid")),
-        ("organizationId", json!(Uuid::from_u128(9))),
+        (
+            "organizationId",
+            json!(Uuid::from_u128(0x01900000000070008000000000000000 + 9)),
+        ),
         ("displayName", json!("  ")),
         ("displayName", json!("x".repeat(101))),
         ("displayName", json!("a\0b")),

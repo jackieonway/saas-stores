@@ -222,13 +222,8 @@ pub(super) fn now_millis() -> i64 {
 }
 
 pub(super) fn id(value: &Value) -> Option<Uuid> {
-    let raw = value.as_str()?;
-    if raw.len() != 36 {
-        return None;
-    }
-    let parsed = Uuid::parse_str(raw).ok()?;
-    (!parsed.is_nil() && parsed.hyphenated().to_string().eq_ignore_ascii_case(raw))
-        .then_some(parsed)
+    // An invalid platform identity invalidates its entire enclosing response.
+    crate::domain::uuid(value.as_str()?).ok()
 }
 
 pub(super) fn validate_intro(intro: &Value, now: i64) -> Result<TokenIdentity, ApiError> {

@@ -15,11 +15,11 @@ use serde_json::json;
 use super::*;
 use crate::Config;
 
-const ACTOR: Uuid = Uuid::from_u128(1);
-const TENANT: Uuid = Uuid::from_u128(2);
-const PARENT: Uuid = Uuid::from_u128(3);
-const CHILD: Uuid = Uuid::from_u128(4);
-const REQUEST: &str = "11111111-1111-4111-8111-111111111111";
+const ACTOR: Uuid = Uuid::from_u128(0x01900000000070008000000000000000 + 1);
+const TENANT: Uuid = Uuid::from_u128(0x01900000000070008000000000000000 + 2);
+const PARENT: Uuid = Uuid::from_u128(0x01900000000070008000000000000000 + 3);
+const CHILD: Uuid = Uuid::from_u128(0x01900000000070008000000000000000 + 4);
+const REQUEST: &str = "11111111-1111-7111-8111-111111111111";
 
 fn auth() -> Authorized {
     let now = policy::now_millis();
@@ -28,7 +28,7 @@ fn auth() -> Authorized {
     let context = json!({"contractVersion":"1.0","appCode":"stores","contextVersion":"a".repeat(64),
         "expiresAt":chrono::DateTime::from_timestamp_millis(now+20_000).unwrap().to_rfc3339(),
         "user":{"id":ACTOR},"tenant":{"id":TENANT},"organization":{"id":PARENT},
-        "application":{"id":Uuid::from_u128(5)},"organizationScopeIds":[PARENT,CHILD],
+        "application":{"id":Uuid::from_u128(0x01900000000070008000000000000000 + 5)},"organizationScopeIds":[PARENT,CHILD],
         "permissions":["store:read"],"dataGrants":[{"resource":"store","action":"read",
         "tenantId":TENANT,"subjectUserId":ACTOR,"scope":"SELF","organizationIds":[]}]});
     policy::validate_context(
@@ -66,7 +66,10 @@ fn projection_is_identity_bound_active_store_metadata_and_strips_upstream_extras
         ("contractVersion", json!("2.0")),
         ("contextVersion", json!("c".repeat(64))),
         ("tenantId", json!(CHILD)),
-        ("id", json!(Uuid::from_u128(99))),
+        (
+            "id",
+            json!(Uuid::from_u128(0x01900000000070008000000000000000 + 99)),
+        ),
         ("organizationType", json!("DEPARTMENT")),
         ("status", json!("DISABLED")),
         ("revision", json!("1")),

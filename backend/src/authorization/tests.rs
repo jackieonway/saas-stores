@@ -6,10 +6,10 @@ use super::*;
 #[path = "test_http.rs"]
 pub(crate) mod test_http;
 
-const USER: &str = "11111111-1111-4111-8111-111111111111";
-const TENANT: &str = "22222222-2222-4222-8222-222222222222";
-const ORG: &str = "33333333-3333-4333-8333-333333333333";
-const CHILD: &str = "44444444-4444-4444-8444-444444444444";
+const USER: &str = "11111111-1111-7111-8111-111111111111";
+const TENANT: &str = "22222222-2222-7222-8222-222222222222";
+const ORG: &str = "33333333-3333-7333-8333-333333333333";
+const CHILD: &str = "44444444-4444-7444-8444-444444444444";
 
 fn intro(now: i64) -> Value {
     json!({"active":true,"aud":"stores","sub":USER,"tenant_id":TENANT,
@@ -21,7 +21,7 @@ fn context(now: i64, resource: Resource, action: Action) -> Value {
         "expiresAt":chrono::DateTime::from_timestamp_millis(now+20_000).unwrap().to_rfc3339(),
         "user":{"id":USER,"username":"clerk","displayName":"员工"},
         "tenant":{"id":TENANT},"organization":{"id":ORG,"name":"门店"},
-        "application":{"id":"55555555-5555-4555-8555-555555555555"},
+        "application":{"id":"55555555-5555-7555-8555-555555555555"},
         "permissions":[format!("{}:{}",resource.as_str(),action.as_str())],
         "dataGrants":[{"resource":resource.as_str(),"action":action.as_str(),"tenantId":TENANT,
             "subjectUserId":USER,"scope":"SELF","organizationIds":[]}]})
@@ -74,6 +74,52 @@ fn cross_application_tokens_and_malformed_introspection_are_rejected() {
         policy::validate_intro(&value, now).err().unwrap().code(),
         "INVALID_APP_TOKEN"
     );
+}
+
+#[test]
+fn every_typed_platform_identity_rejects_legacy_versions_and_wrong_variants() {
+    let now = policy::now_millis();
+    for raw in [
+        "11111111-1111-4111-8111-111111111111", // Intentional legacy v4 negative fixture.
+        "11111111-1111-7111-c111-111111111111", // Wrong variant despite version 7.
+        "not-a-uuid",
+    ] {
+        for field in ["sub", "tenant_id", "organization_id"] {
+            let mut value = intro(now);
+            value[field] = json!(raw);
+            assert!(
+                policy::validate_intro(&value, now).is_err(),
+                "{field}: {raw}"
+            );
+        }
+        for pointer in [
+            "/user/id",
+            "/tenant/id",
+            "/organization/id",
+            "/application/id",
+            "/dataGrants/0/tenantId",
+            "/dataGrants/0/subjectUserId",
+        ] {
+            let mut value = context(now, Resource::Store, Action::Read);
+            *value.pointer_mut(pointer).unwrap() = json!(raw);
+            assert!(
+                authorized(&value, Resource::Store, Action::Read, now).is_err(),
+                "{pointer}: {raw}"
+            );
+        }
+        for field in ["organizationScopeIds", "dataGrants"] {
+            let mut value = context(now, Resource::Store, Action::Read);
+            if field == "organizationScopeIds" {
+                value[field] = json!([ORG, raw]);
+            } else {
+                value["dataGrants"][0]["organizationIds"] = json!([ORG, raw]);
+            }
+            assert!(
+                authorized(&value, Resource::Store, Action::Read, now).is_err(),
+                "{field}: {raw}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -180,7 +226,7 @@ fn row_and_sql_scopes_intersect_owner_grant_and_separate_hard_ceiling() {
     let current = Uuid::parse_str(ORG).unwrap();
     let child = Uuid::parse_str(CHILD).unwrap();
     let actor = Uuid::parse_str(USER).unwrap();
-    let outside = Uuid::new_v4();
+    let outside = crate::domain::new_id();
     for (scope, ids, own_child) in [
         ("SELF", json!([ORG, CHILD]), true),
         ("ORG", json!([ORG]), false),
@@ -237,7 +283,7 @@ use std::sync::{
     Mutex,
 };
 use tokio::net::TcpListener;
-const REQUEST_ID: &str = "66666666-6666-4666-8666-666666666666";
+const REQUEST_ID: &str = "66666666-6666-7666-8666-666666666666";
 struct Fixture {
     mode: AtomicU8,
     calls: AtomicUsize,

@@ -12,6 +12,8 @@
 
 成功响应直接返回记录或分页，没有 `data` 包装。创建返回 `201`，读取及更新返回 `200`。错误为 `{"code":"...","message":"..."}`。响应带 `Cache-Control: no-store`、`X-Request-Id`，不回显上游正文、SQL 或凭据。
 
+系统实体 UUID 统一为 version 7／RFC variant。Path、typed DTO、平台身份投影和筛选参数中的 v4、nil、错误 variant 拒绝，非法筛选不会扩大结果。业务编码、幂等键和安全随机 token 保持各自字符串合同。外部 `X-Request-Id` 仅沿用单个有效 v7，其余情况重新生成 v7 作为系统请求 ID。
+
 ## 路由
 
 | 方法与路径 | 资源 / 动作 | 结果 |
