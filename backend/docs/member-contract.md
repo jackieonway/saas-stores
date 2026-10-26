@@ -11,9 +11,9 @@
 | 组织成员和成员显示名 | 经当前成员资格复核的营业联系人 |
 | 角色、权限、组织硬边界和数据授权 | 日报、乐观版本、业务 owner 和审计历史 |
 
-managerUserId 表示营业联系人，不是平台组织管理者。门店 owner 为营业档案创建人，日报 owner 为录入人，联系人变化不会改变 owner。已存在的 profile ID、日报 storeId 引用、旧名称和旧 store_staff 历史均保留，旧映射不会自动转成 STORE 或删除。
+managerUserId 表示营业联系人，不是平台组织管理者。门店 owner 为营业档案创建人，日报 owner 为录入人，联系人变化不会改变 owner。profile ID 与日报 storeId 引用由门店业务库维护，组织身份和成员资格以平台当前投影为准。
 
-新增迁移 `0002_platform_owned_store_identity.sql` 在确认原 v1 fingerprint 后冻结旧 stores.name 的实际变更，并阻止 store_staff 新写入。v1 SQL、校验函数和历史 baseline 不变；v2 fingerprint 同时覆盖继承结构和新增约束。
+全新数据库统一执行 `0001_stores.sql`，其中已包含平台受控组织身份约束。`stores_schema_fingerprint()` 与 `_stores_schema_contract` 校验当前完整结构；不再使用历史迁移链或旧版 fingerprint 兼容路径。
 
 ## 平台受控组织投影
 

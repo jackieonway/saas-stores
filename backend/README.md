@@ -6,7 +6,7 @@
 
 程序只读取启动环境，不自动加载 `.env` 或 `config.example`。完整示例见 [开发指南](docs/development.md)，生产运行见 [部署指南](docs/deployment.md)。注入配置后，在本目录执行 `cargo run --locked`；本目录也是 `docker build` 的后端上下文。
 
-独立迁移命令为 `cargo run --locked --bin stores-migrate`，导入前初始化可使用 `cargo run --locked --bin stores-migrate -- --import`。两种方式都只读取 `STORES_DATABASE_URL`，连接已创建的数据库、执行并核验原有正式迁移，然后关闭连接退出；不启动 HTTP，不要求平台或 CORS 配置，不创建数据库或角色，`--import` 不导入数据。门店没有 seed，`--seed` 会被拒绝；`--seed --import` 明确互斥，未知或重复参数也会在连接前失败。
+独立迁移命令为 `cargo run --locked --bin stores-migrate`，导入前初始化可使用 `cargo run --locked --bin stores-migrate -- --import`。两种方式都只读取 `STORES_DATABASE_URL`，连接已创建的数据库、执行并核验当前全新基线，然后关闭连接退出；不启动 HTTP，不要求平台或 CORS 配置，不创建数据库或角色，`--import` 不导入数据。门店没有 seed，`--seed` 会被拒绝；`--seed --import` 明确互斥，未知或重复参数也会在连接前失败。
 
 迁移命令拒绝 `PG*` 环境变量，避免驱动继承 URL 之外的端口、密码、证书或会话设置；数据库 TLS 仍通过 `STORES_DATABASE_URL` 的受支持参数配置。连接获取限时 5 秒，迁移限时 5 分钟，关闭连接限时 10 秒。先停用业务进程，由导入流程保持独占；该命令不提供数据导入互斥锁。默认 `cargo run --locked` 仍启动 `stores-api`。
 
@@ -79,10 +79,6 @@ PostgreSQL URI 只接受 `sslmode` / `ssl-mode`、根证书 `sslrootcert` / `ssl
 
 数据库包含营业档案、历史员工关联、日报和审计事件。当前每个 tenant / STORE organization 只能有一份营业档案，同一门店同一营业日只能有一份日报。平台名称、编码、地址和层级不接受业务写入；名称响应来自平台实时投影，成员列表来自平台直接成员。旧 staff 写路由返回 410，不再写关联表。更新采用整数 `version` 乐观并发；金额以十进制字符串传输。详情、分页、汇总和写入都受相同授权范围约束，完整输入和恢复规则见 [API](API.md)。
 
-`0002_platform_owned_store_identity.sql` 先验证原 v1 结构，再冻结旧 stores.name 实际修改、阻止 store_staff 写入并建立 v2 fingerprint；原 0001、v1 函数与 baseline 字节保持不变，旧映射和历史数据不自动删除或转类型。迁移历史 checksum 和 schema fingerprint 不匹配时拒绝启动或就绪。通过新增迁移演进结构；不要改写已执行 SQL、迁移历史或 fingerprint 来跳过校验。存活接口只证明进程可响应，就绪接口同时校验业务库结构。
-
-`0003_uuid_v7.sql` 在验证 v2 后，为全部 23 个 UUID 列追加 version 7／RFC variant 约束，并建立独立的 v3 fingerprint 和 `_stores_schema_contract_v3`；历史 migration、v1/v2 存储摘要均保原。应用显式生成 UUID v7，外部 typed ID、Path、DTO 和过滤条件拒绝 v4、nil、错误 variant。已有非 v7 业务行会使迁移原子失败，需按平台 UUID 专项先导出重编号并导入全新目标库，再启动新版本；不能对仍使用 v4 的源库直接启动新 binary。
-
 ```sh
 cargo fmt --all -- --check
 cargo check --locked --all-targets
@@ -94,3 +90,10 @@ cargo build --release --locked
 真实 PostgreSQL 专项测试需要 `tests/postgres_contracts.rs` 要求的独占 CI 数据库所有权环境，普通测试不会执行。不可对共享、开发业务或生产库直接启用该测试。
 
 Windows 本机若限制 Rust 测试可执行文件的回环入站，可按 [开发指南](docs/development.md)通过测试专用 `STORES_TEST_NODE` 选择 Node 监听 fixture，保留生产客户端与所有原测试断言。该变量不影响生产 API，也不调整系统防火墙。
+
+
+## 全新数据库基线
+
+仅使用 `migrations/0001_stores.sql` 初始化空库，不再兼容旧升级链或历史迁移记录。SQLx 只记录版本 1，并核对当前结构指纹；漂移或 checksum 不符拒绝启动。不会通过改写迁移历史或旧快照签认现状。UUIDv7、当前身份/不可变约束、幂等与业务审计在首次建表时全部建立。
+
+系统与其他服务的数据归属见[全新安装](../../saas-plateform/backend/docs/fresh-installation.md)。

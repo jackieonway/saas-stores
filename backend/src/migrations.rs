@@ -16,6 +16,12 @@ pub(crate) async fn initialize(pool: &PgPool) -> Result<(), ServiceError> {
     // to the request pool, and cancellation drops its physical socket as well.
     let mut connection = pool.acquire().await.map_err(failed)?.detach();
     let result = async {
+        let history:bool=sqlx::query_scalar("SELECT to_regclass('public._sqlx_migrations') IS NOT NULL").fetch_one(&mut connection).await.map_err(failed)?;
+        if !history {
+            let occupied:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','S'))").fetch_one(&mut connection).await.map_err(failed)?;
+            if occupied{return Err(failed(std::io::Error::other("fresh empty database required")));}
+        }
+
         // Runtime queries use a catalog-first path. CREATE must target public,
         // including SQLx's unqualified migration history table, under a normal
         // non-superuser business role.
@@ -66,9 +72,7 @@ pub(crate) async fn verify_connection(connection: &mut PgConnection) -> Result<(
             "business migration history mismatch",
         )));
     }
-    // Each owner migration preserves the earlier snapshots and establishes its
-    // own verified contract. Never overwrite v1/v2 to bless a changed catalog.
-    let verified: bool = sqlx::query_scalar("SELECT count(*)=1 AND COALESCE(bool_and(v3.fingerprint=public.stores_schema_fingerprint_v3() AND v3.legacy_fingerprint=v2.fingerprint AND v2.legacy_fingerprint=v1.fingerprint),false) FROM public._stores_schema_contract_v3 AS v3 JOIN public._stores_schema_contract_v2 AS v2 USING(singleton) JOIN public._stores_schema_contract AS v1 USING(singleton) WHERE v3.singleton")
+    let verified: bool = sqlx::query_scalar("SELECT count(*)=1 AND COALESCE(bool_and(fingerprint=public.stores_schema_fingerprint()),false) FROM public._stores_schema_contract WHERE singleton")
         .fetch_one(&mut *connection).await.map_err(failed)?;
     if !verified {
         return Err(failed(std::io::Error::other(

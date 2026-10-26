@@ -2,7 +2,6 @@
 //! Ordinary test runs ignore database cases; the CI owner supplies its URL.
 
 use std::{
-    borrow::Cow,
     future::Future,
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -11,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use sqlx::{postgres::PgPoolOptions, Connection, PgPool};
+use sqlx::{postgres::PgPoolOptions, PgPool};
 use stores_api::initialize_database;
 use tokio::sync::Barrier;
 use uuid::Uuid;
@@ -152,190 +151,15 @@ async fn reject(pool: &PgPool, sql: &str, code: &str) {
     );
 }
 
-async fn initialize_bounded(pool: &PgPool) -> Result<(), stores_api::ServiceError> {
-    tokio::time::timeout(Duration::from_secs(3), initialize_database(pool))
-        .await
-        .expect("migration verification or recovery exceeded its three-second budget")
-}
-
-async fn initialize_through(pool: &PgPool, version: i64) {
-    let all = sqlx::migrate!("./migrations");
-    let migrations = all
-        .iter()
-        .filter(|migration| migration.version <= version)
-        .cloned()
-        .collect();
-    let migrator = sqlx::migrate::Migrator {
-        migrations: Cow::Owned(migrations),
-        ..sqlx::migrate::Migrator::DEFAULT
-    };
-    let mut connection = pool.acquire().await.unwrap().detach();
-    sqlx::query("SELECT pg_catalog.set_config('search_path','public,pg_catalog,pg_temp',false)")
-        .execute(&mut connection)
-        .await
-        .unwrap();
-    migrator.run_direct(&mut connection).await.unwrap();
-    connection.close().await.unwrap();
-}
-
 async fn business_snapshot(pool: &PgPool) -> serde_json::Value {
     sqlx::query_scalar("SELECT pg_catalog.jsonb_build_object('stores',(SELECT COALESCE(jsonb_agg(to_jsonb(business_row) ORDER BY id),'[]'::jsonb) FROM public.stores AS business_row),'staff',(SELECT COALESCE(jsonb_agg(to_jsonb(business_row) ORDER BY id),'[]'::jsonb) FROM public.store_staff AS business_row),'reports',(SELECT COALESCE(jsonb_agg(to_jsonb(business_row) ORDER BY id),'[]'::jsonb) FROM public.store_daily_reports AS business_row),'audit',(SELECT COALESCE(jsonb_agg(to_jsonb(business_row) ORDER BY id),'[]'::jsonb) FROM public.store_audit_events AS business_row))")
         .fetch_one(pool).await.unwrap()
 }
 
-#[tokio::test]
-#[ignore = "requires the owned CI PostgreSQL driver"]
-async fn uuid_v7_upgrade_rejects_v4_rows_without_rewriting_any_old_baseline() {
-    owned(|pool| async move {
-        initialize_through(&pool, 2).await;
-        // Intentional v4 legacy source. This test must prove fail-closed upgrade,
-        // rather than silently blessing a mixed UUID identity epoch.
-        let old = Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
-        sqlx::query("INSERT INTO stores(id,tenant_id,organization_id,owner_user_id,name,business_status,business_contact) VALUES($1,$1,$1,$1,'Legacy v4','OPEN','')")
-            .bind(old).execute(&pool).await.unwrap();
-        let before = business_snapshot(&pool).await;
-        let baselines: (String, String) = sqlx::query_as("SELECT v1.fingerprint,v2.fingerprint FROM public._stores_schema_contract AS v1 JOIN public._stores_schema_contract_v2 AS v2 USING(singleton)")
-            .fetch_one(&pool).await.unwrap();
-        let checksums: Vec<(i64, Vec<u8>)> = sqlx::query_as("SELECT version,checksum FROM public._sqlx_migrations ORDER BY version")
-            .fetch_all(&pool).await.unwrap();
-        for _ in 0..2 {
-            assert!(initialize_bounded(&pool).await.is_err());
-            assert_eq!(business_snapshot(&pool).await, before);
-            let current: (String, String) = sqlx::query_as("SELECT v1.fingerprint,v2.fingerprint FROM public._stores_schema_contract AS v1 JOIN public._stores_schema_contract_v2 AS v2 USING(singleton)")
-                .fetch_one(&pool).await.unwrap();
-            assert_eq!(current, baselines);
-            let current: Vec<(i64, Vec<u8>)> = sqlx::query_as("SELECT version,checksum FROM public._sqlx_migrations ORDER BY version")
-                .fetch_all(&pool).await.unwrap();
-            assert_eq!(current, checksums);
-            let rolled_back: bool = sqlx::query_scalar("SELECT pg_catalog.to_regclass('public._stores_schema_contract_v3') IS NULL AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_constraint WHERE connamespace='public'::regnamespace AND conname LIKE '%_uuid_v7')")
-                .fetch_one(&pool).await.unwrap();
-            assert!(rolled_back);
-        }
-        check("uuid_v7_legacy_rows_fail_without_rewriting_data_or_baselines");
-    }).await;
-}
-
-#[tokio::test]
-#[ignore = "requires the owned CI PostgreSQL driver"]
-async fn uuid_v7_contract_covers_all_columns_and_preserves_the_v2_snapshot() {
-    owned(|pool| async move {
-        initialize_through(&pool, 2).await;
-        let before: (String, String) = sqlx::query_as("SELECT v1.fingerprint,v2.fingerprint FROM public._stores_schema_contract AS v1 JOIN public._stores_schema_contract_v2 AS v2 USING(singleton)")
-            .fetch_one(&pool).await.unwrap();
-        sqlx::query("ALTER TABLE public.stores ADD COLUMN unexpected_uuid_upgrade TEXT").execute(&pool).await.unwrap();
-        assert!(initialize_bounded(&pool).await.is_err(), "v3 must verify the existing v2 catalog before establishing a contract");
-        let absent: bool = sqlx::query_scalar("SELECT pg_catalog.to_regclass('public._stores_schema_contract_v3') IS NULL").fetch_one(&pool).await.unwrap();
-        assert!(absent);
-        sqlx::query("ALTER TABLE public.stores DROP COLUMN unexpected_uuid_upgrade").execute(&pool).await.unwrap();
-        initialize_bounded(&pool).await.unwrap();
-        let after: (String, String, String) = sqlx::query_as("SELECT v1.fingerprint,v2.fingerprint,v3.legacy_fingerprint FROM public._stores_schema_contract AS v1 JOIN public._stores_schema_contract_v2 AS v2 USING(singleton) JOIN public._stores_schema_contract_v3 AS v3 USING(singleton)")
-            .fetch_one(&pool).await.unwrap();
-        assert_eq!((&after.0, &after.1, &after.2), (&before.0, &before.1, &before.1));
-
-        // Discover every actual UUID column and evaluate its installed CHECK,
-        // including the permanently read-only staff history columns.
-        let checks: Vec<(String, String, Option<String>, Option<bool>)> = sqlx::query_as("SELECT c.relname,a.attname,pg_catalog.pg_get_expr(k.conbin,k.conrelid),k.convalidated FROM pg_catalog.pg_class AS c JOIN pg_catalog.pg_namespace AS n ON n.oid=c.relnamespace JOIN pg_catalog.pg_attribute AS a ON a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped LEFT JOIN pg_catalog.pg_constraint AS k ON k.conrelid=c.oid AND k.conkey=ARRAY[a.attnum] AND k.contype='c' AND k.conname=c.relname||'_'||a.attname||'_uuid_v7' WHERE n.nspname='public' AND c.relkind IN ('r','p') AND a.atttypid='uuid'::regtype ORDER BY c.relname,a.attnum")
-            .fetch_all(&pool).await.unwrap();
-        assert_eq!(checks.len(), 23);
-        for (table, column, expression, validated) in checks {
-            assert_eq!(validated, Some(true), "{table}.{column} must have a validated UUID constraint");
-            let expression = expression.unwrap();
-            assert!(column.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'));
-            let sql = format!("SELECT {expression} FROM (SELECT $1::uuid AS {column}) AS fixture");
-            let accepted: bool = sqlx::query_scalar(&sql).bind(new_id()).fetch_one(&pool).await.unwrap();
-            assert!(accepted, "{table}.{column} must accept v7");
-            for raw in [
-                "11111111-1111-4111-8111-111111111111", // Intentional v4 negative fixture.
-                "11111111-1111-7111-0111-111111111111", // NCS variant.
-                "11111111-1111-7111-c111-111111111111", // Microsoft variant.
-                "11111111-1111-7111-e111-111111111111", // Reserved variant.
-                "00000000-0000-0000-0000-000000000000", // Nil sentinel.
-            ] {
-                let accepted: bool = sqlx::query_scalar(&sql).bind(Uuid::parse_str(raw).unwrap()).fetch_one(&pool).await.unwrap();
-                assert!(!accepted, "{table}.{column} accepted {raw}");
-            }
-        }
-        let defaults: i64 = sqlx::query_scalar("SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND udt_name='uuid' AND column_default IS NOT NULL")
-            .fetch_one(&pool).await.unwrap();
-        assert_eq!(defaults, 0);
-        for raw in [
-            "11111111-1111-4111-8111-111111111111", // Intentional v4 negative fixture.
-            "11111111-1111-7111-c111-111111111111", // Wrong variant.
-        ] {
-            let error = sqlx::query("INSERT INTO stores(id,tenant_id,organization_id,owner_user_id,name,business_status,business_contact) VALUES($1,$2,$3,$4,'Rejected','OPEN','')")
-                .bind(Uuid::parse_str(raw).unwrap()).bind(new_id()).bind(new_id()).bind(new_id()).execute(&pool).await.unwrap_err();
-            assert_eq!(error.as_database_error().and_then(|error| error.constraint()), Some("stores_id_uuid_v7"));
-        }
-        sqlx::query("ALTER TABLE public._stores_schema_contract_v3 ADD COLUMN unexpected TEXT").execute(&pool).await.unwrap();
-        assert!(initialize_bounded(&pool).await.is_err());
-        sqlx::query("ALTER TABLE public._stores_schema_contract_v3 DROP COLUMN unexpected").execute(&pool).await.unwrap();
-        initialize_bounded(&pool).await.unwrap();
-        sqlx::query("ALTER FUNCTION public.stores_schema_fingerprint_v3() VOLATILE").execute(&pool).await.unwrap();
-        assert!(initialize_bounded(&pool).await.is_err());
-        sqlx::query("ALTER FUNCTION public.stores_schema_fingerprint_v3() STABLE").execute(&pool).await.unwrap();
-        initialize_bounded(&pool).await.unwrap();
-        check("all_23_uuid_columns_enforce_v7_and_rfc_variant_with_v3_contract");
-    }).await;
-}
-
-#[tokio::test]
-#[ignore = "requires the owned CI PostgreSQL driver"]
-async fn legacy_upgrade_preserves_data_and_freezes_platform_owned_fields() {
-    owned(|pool| async move {
-        initialize_through(&pool, 1).await;
-        let tenant = new_id();
-        let org = new_id();
-        let user = new_id();
-        let store = new_id();
-        sqlx::query("INSERT INTO stores(id,tenant_id,organization_id,owner_user_id,name,business_status,business_contact,manager_user_id,manager_display_name) VALUES($1,$2,$3,$4,'Legacy store','OPEN','Legacy contact',$4,'Legacy manager')").bind(store).bind(tenant).bind(org).bind(user).execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO store_daily_reports(id,tenant_id,store_id,organization_id,owner_user_id,business_date,amount,note) VALUES($1,$2,$3,$4,$5,DATE '2026-10-20','42.33'::numeric,'Legacy note')").bind(new_id()).bind(tenant).bind(store).bind(org).bind(user).execute(&pool).await.unwrap();
-
-        // Exercise the unchanged v1 staff contract before migrating its history.
-        let link = new_id();
-        sqlx::query("INSERT INTO store_staff(id,tenant_id,store_id,organization_id,owner_user_id,user_id,display_name,created_by_user_id) VALUES($1,$2,$3,$4,$5,$5,'Member',$5)").bind(link).bind(tenant).bind(store).bind(org).bind(user).execute(&pool).await.unwrap();
-        let duplicate = sqlx::query("INSERT INTO store_staff(id,tenant_id,store_id,organization_id,owner_user_id,user_id,display_name,created_by_user_id) VALUES($1,$2,$3,$4,$5,$5,'Member',$5)").bind(new_id()).bind(tenant).bind(store).bind(org).bind(user).execute(&pool).await.expect_err("active staff uniqueness");
-        assert_eq!(duplicate.as_database_error().and_then(|error| error.constraint()), Some("store_staff_active_member_key"));
-        sqlx::query("UPDATE store_staff SET removed_at=now(),updated_at=now(),version=version+1 WHERE id=$1 AND version=1").bind(link).execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO store_staff(id,tenant_id,store_id,organization_id,owner_user_id,user_id,display_name,created_by_user_id) VALUES($1,$2,$3,$4,$5,$5,'Member',$5)").bind(new_id()).bind(tenant).bind(store).bind(org).bind(user).execute(&pool).await.unwrap();
-        let history: (i64, i64) = sqlx::query_as("SELECT count(*),count(*) FILTER(WHERE removed_at IS NULL) FROM store_staff").fetch_one(&pool).await.unwrap();
-        assert_eq!(history, (2, 1));
-        sqlx::query("INSERT INTO store_audit_events(id,tenant_id,organization_id,actor_user_id,resource_code,action_code,entity_id,request_id) VALUES($1,$2,$3,$4,'store-staff','assign',$5,$6)").bind(new_id()).bind(tenant).bind(org).bind(user).bind(link).bind(new_id()).execute(&pool).await.unwrap();
-        check("staff_active_uniqueness_and_removed_history");
-
-        let before = business_snapshot(&pool).await;
-        let legacy_baseline: String = sqlx::query_scalar("SELECT fingerprint FROM public._stores_schema_contract WHERE singleton").fetch_one(&pool).await.unwrap();
-        let legacy_function: String = sqlx::query_scalar("SELECT pg_catalog.pg_get_functiondef('public.stores_schema_fingerprint()'::regprocedure)").fetch_one(&pool).await.unwrap();
-        let legacy_checksum: Vec<u8> = sqlx::query_scalar("SELECT checksum FROM public._sqlx_migrations WHERE version=1").fetch_one(&pool).await.unwrap();
-        sqlx::query("ALTER TABLE public.stores ADD COLUMN upgrade_unexpected TEXT").execute(&pool).await.unwrap();
-        assert!(initialize_bounded(&pool).await.is_err(), "upgrade must reject existing v1 schema drift");
-        let unapplied: bool = sqlx::query_scalar("SELECT NOT EXISTS(SELECT 1 FROM public._sqlx_migrations WHERE version=2) AND pg_catalog.to_regclass('public._stores_schema_contract_v2') IS NULL").fetch_one(&pool).await.unwrap();
-        assert!(unapplied, "failed upgrade must not record a new baseline");
-        sqlx::query("ALTER TABLE public.stores DROP COLUMN upgrade_unexpected").execute(&pool).await.unwrap();
-        initialize_bounded(&pool).await.expect("verified v1 database upgrades");
-        initialize_bounded(&pool).await.expect("v3 startup is repeatable");
-        assert_eq!(business_snapshot(&pool).await, before, "upgrade preserves every business and audit value");
-        let baselines: (String, String) = sqlx::query_as("SELECT v1.fingerprint,v2.legacy_fingerprint FROM public._stores_schema_contract AS v1 JOIN public._stores_schema_contract_v2 AS v2 USING(singleton)").fetch_one(&pool).await.unwrap();
-        assert_eq!(baselines, (legacy_baseline.clone(), legacy_baseline));
-        let after_function: String = sqlx::query_scalar("SELECT pg_catalog.pg_get_functiondef('public.stores_schema_fingerprint()'::regprocedure)").fetch_one(&pool).await.unwrap();
-        assert_eq!(after_function, legacy_function);
-        let after_checksum: Vec<u8> = sqlx::query_scalar("SELECT checksum FROM public._sqlx_migrations WHERE version=1").fetch_one(&pool).await.unwrap();
-        assert_eq!(after_checksum, legacy_checksum);
-        check("v1_upgrade_preserves_data_baseline_and_migration_checksum");
-
-        reject(&pool, "UPDATE stores SET name='old binary rename',version=version+1", "23514").await;
-        reject(&pool, "UPDATE store_staff SET removed_at=now(),updated_at=now(),version=version+1 WHERE removed_at IS NULL", "23514").await;
-        reject(&pool, "DELETE FROM store_staff", "23514").await;
-        reject(&pool, "TRUNCATE store_staff", "23514").await;
-        let blocked_insert = sqlx::query("INSERT INTO store_staff(id,tenant_id,store_id,organization_id,owner_user_id,user_id,display_name,created_by_user_id) VALUES($1,$2,$3,$4,$5,$5,'Member',$5)").bind(new_id()).bind(tenant).bind(store).bind(org).bind(new_id()).execute(&pool).await.expect_err("old binary cannot assign staff");
-        assert_eq!(blocked_insert.as_database_error().and_then(|error| error.code()).as_deref(), Some("23514"));
-        assert_eq!(business_snapshot(&pool).await, before, "blocked legacy writes preserve all rows");
-        sqlx::query("UPDATE stores SET name=name,business_status='CLOSED',business_contact='Updated contact',version=version+1,updated_at=now() WHERE id=$1 AND version=1").bind(store).execute(&pool).await.unwrap();
-        sqlx::query("UPDATE store_daily_reports SET amount='43.33'::numeric,note='Updated note',version=version+1,updated_at=now() WHERE store_id=$1 AND version=1").bind(store).execute(&pool).await.unwrap();
-        let editable: (String, String, String, i32) = sqlx::query_as("SELECT stores.name,stores.business_status,reports.amount::text,reports.version FROM stores JOIN store_daily_reports AS reports ON reports.store_id=stores.id WHERE stores.id=$1").bind(store).fetch_one(&pool).await.unwrap();
-        assert_eq!(editable, ("Legacy store".to_owned(), "CLOSED".to_owned(), "43.33".to_owned(), 2));
-        initialize_bounded(&pool).await.expect("allowed business writes preserve schema contract");
-        check("legacy_name_and_staff_writes_blocked_while_business_data_remains_editable");
-    }).await;
+async fn initialize_bounded(pool: &PgPool) -> Result<(), stores_api::ServiceError> {
+    tokio::time::timeout(Duration::from_secs(3), initialize_database(pool))
+        .await
+        .expect("migration verification or recovery exceeded its three-second budget")
 }
 
 #[tokio::test]
@@ -429,14 +253,6 @@ async fn postgres_contracts() {
         assert!(initialize_bounded(&pool).await.is_err(), "fingerprint definition drift must be rejected");
         sqlx::query("ALTER FUNCTION public.stores_schema_fingerprint() STABLE").execute(&pool).await.unwrap();
         initialize_bounded(&pool).await.expect("restored fingerprint definition");
-        sqlx::query("ALTER TABLE public._stores_schema_contract_v2 ADD COLUMN unexpected TEXT").execute(&pool).await.unwrap();
-        assert!(initialize_bounded(&pool).await.is_err(), "v2 metadata schema drift must be rejected");
-        sqlx::query("ALTER TABLE public._stores_schema_contract_v2 DROP COLUMN unexpected").execute(&pool).await.unwrap();
-        initialize_bounded(&pool).await.expect("restored v2 metadata schema contract");
-        sqlx::query("ALTER FUNCTION public.stores_schema_fingerprint_v2() VOLATILE").execute(&pool).await.unwrap();
-        assert!(initialize_bounded(&pool).await.is_err(), "v2 fingerprint definition drift must be rejected");
-        sqlx::query("ALTER FUNCTION public.stores_schema_fingerprint_v2() STABLE").execute(&pool).await.unwrap();
-        initialize_bounded(&pool).await.expect("restored v2 fingerprint definition");
         sqlx::query("ALTER TABLE public.store_staff DISABLE TRIGGER store_staff_legacy_read_only").execute(&pool).await.unwrap();
         assert!(initialize_bounded(&pool).await.is_err(), "staff write guard drift must be rejected");
         sqlx::query("ALTER TABLE public.store_staff ENABLE TRIGGER store_staff_legacy_read_only").execute(&pool).await.unwrap();
@@ -808,7 +624,7 @@ async fn api_call(
 async fn platform_store_snapshot_guards_legacy_http_reads_and_writes() {
     use serde_json::json;
     owned(|pool| async move {
-        initialize_through(&pool, 1).await;
+        initialize_database(&pool).await.unwrap();
         let api_pool = PgPoolOptions::new().max_connections(1).acquire_timeout(Duration::from_secs(2))
             .after_connect(|connection, _| Box::pin(async move {
                 sqlx::query("SELECT pg_catalog.set_config('search_path','pg_catalog,public,pg_temp',false)")
@@ -1226,4 +1042,23 @@ async fn employee_member_candidates_and_manager_writes_preserve_the_user_id_cont
         check("retired_staff_writes_authorize_employee_then_return_410_and_deny_customer_without_writes");
         api_pool.close().await;
     }).await;
+}
+
+#[tokio::test]
+#[ignore = "requires the owned CI PostgreSQL driver"]
+async fn untracked_database_is_not_adopted_as_a_fresh_store_database() {
+    owned(|pool| async move {
+        sqlx::query("CREATE TABLE public.old_business_data(id bigint PRIMARY KEY)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(initialize_database(&pool).await.is_err());
+        let initialized: bool =
+            sqlx::query_scalar("SELECT to_regclass('public.stores') IS NOT NULL")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(!initialized);
+    })
+    .await;
 }
