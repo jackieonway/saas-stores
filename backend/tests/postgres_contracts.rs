@@ -568,9 +568,10 @@ async fn platform_response(
         // All organization HTTP must precede acquiring or locking business rows.
         // This is the same one-connection pool used by the API. Acquiring it
         // here would deadlock if the request retained its connection over HTTP.
-        // A bounded acquisition permits SQLx's asynchronous return-to-pool work
-        // without treating transient idle-counter changes as an active lease.
-        let mut connection = tokio::time::timeout(Duration::from_millis(200), state.pool.acquire())
+        // Keep this below the API's two-second pool timeout, while allowing
+        // SQLx's asynchronous return and CI scheduling to finish. A connection
+        // held over HTTP still exhausts this bound; row locks still use NOWAIT.
+        let mut connection = tokio::time::timeout(Duration::from_secs(1), state.pool.acquire())
             .await
             .expect("business connection held during organization HTTP")
             .unwrap();
@@ -581,9 +582,10 @@ async fn platform_response(
                 .expect("organization HTTP must not wait behind a business row lock");
         }
         // The optional Node bridge drives this handler on a separate runtime.
-        // Finish the probe lease explicitly rather than parking SQLx's async
-        // return-to-pool work on that runtime between HTTP requests.
-        connection.close().await.unwrap();
+        // Return the probe lease explicitly on that runtime. Closing it instead
+        // forces the one-connection API pool to reconnect after every lookup,
+        // adding unrelated handshake latency to the no-held-connection proof.
+        connection.return_to_pool().await;
         state.organization_reads.fetch_add(1, Ordering::SeqCst);
         let record = state.organization();
         if uri.path() == "/internal/platform/apps/stores/organizations" {
