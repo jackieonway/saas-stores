@@ -2,8 +2,8 @@
 //!
 //! Identity and authorization are obtained through the platform's bounded HTTP
 //! protocol. This crate owns only its separate business database and does not
-//! depend on platform or work-order implementation crates. Startup initializes
-//! or verifies the schema before binding a listener. Public errors contain
+//! depend on platform or work-order implementation crates. Startup verifies
+//! the pre-provisioned schema before binding a listener. Public errors contain
 //! fixed safe categories, and no environment file is loaded automatically.
 
 mod authorization;
@@ -81,8 +81,12 @@ pub async fn run(config: Config) -> Result<(), ServiceError> {
         let authorizer = authorization::Authorizer::new(&config)?;
         let pool = connect_database(&config).await?;
         let initialized = match &config.database_initialization {
+            // Migrations belong to the offline stores-migrate job. Even
+            // CREATE TABLE IF NOT EXISTS requires schema CREATE in PostgreSQL,
+            // so running SQLx's migrator here would reject a restricted runtime
+            // against an already current database or require excess privilege.
             imported_database::DatabaseInitialization::Initialize => {
-                initialize_database(&pool).await
+                migrations::verify(&pool).await
             }
             imported_database::DatabaseInitialization::Imported(receipt) => {
                 imported_database::verify(&pool, receipt).await

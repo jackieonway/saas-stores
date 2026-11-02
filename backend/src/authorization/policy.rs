@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -97,9 +98,34 @@ pub(crate) struct Authorized {
     expires_at: i64,
     context_version: String,
     organization_deadline: Option<std::time::Instant>,
+    authority: Option<AuthorityBinding>,
+}
+
+#[derive(PartialEq)]
+struct AuthorityBinding {
+    issuer: String,
+    token_use: String,
+    client: String,
+    source_application: Option<Uuid>,
+    target_application: Uuid,
+    membership: Uuid,
+    account_version: i64,
+    identity_version: i64,
+    scope: String,
 }
 
 impl Authorized {
+    pub(crate) fn same_authority(&self, current: &Self) -> bool {
+        self.authority == current.authority
+            && self.user_id == current.user_id
+            && self.tenant_id == current.tenant_id
+            && self.organization_id == current.organization_id
+            && self.context_version == current.context_version
+            && self.resource == current.resource
+            && self.action == current.action
+            && self.scope == current.scope
+            && self.grant_organization_ids == current.grant_organization_ids
+    }
     pub(crate) fn tenant_id(&self) -> Uuid {
         self.tenant_id
     }
@@ -156,16 +182,19 @@ impl Authorized {
         self.assert_fresh()
     }
     pub(crate) fn assert_fresh(&self) -> Result<(), ApiError> {
+        self.assert_at(now_millis(), std::time::Instant::now())
+    }
+    pub(super) fn assert_at(&self, now: i64, instant: std::time::Instant) -> Result<(), ApiError> {
         if self
             .organization_deadline
-            .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+            .is_some_and(|deadline| instant >= deadline)
         {
             Err(ApiError::new(
                 503,
                 "ORGANIZATION_VALIDATION_EXPIRED",
                 "平台门店组织校验已到期，请重新查询或提交",
             ))
-        } else if self.expires_at <= now_millis() {
+        } else if self.expires_at <= now {
             Err(ApiError::invalid_context())
         } else {
             Ok(())
@@ -226,28 +255,176 @@ pub(super) fn id(value: &Value) -> Option<Uuid> {
     crate::domain::uuid(value.as_str()?).ok()
 }
 
-pub(super) fn validate_intro(intro: &Value, now: i64) -> Result<TokenIdentity, ApiError> {
-    let parse = || -> Option<TokenIdentity> {
-        let exp = intro.get("exp")?.as_f64()?;
-        if !exp.is_finite() || exp.fract() != 0.0 || exp.abs() > 9_007_199_254_740_991.0 {
-            return None;
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct UserPrincipal {
+    user_id: String,
+    membership_id: String,
+    member_type: String,
+    identity_version: String,
+    account_version: String,
+    tenant_id: String,
+    organization_id: String,
+}
+
+fn positive_version(raw: &str) -> Option<i64> {
+    if raw.is_empty() || raw.starts_with('0') || !raw.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    raw.parse().ok().filter(|value| *value > 0)
+}
+
+pub(super) fn validate_authorization(
+    reply: &Value,
+    resource: Resource,
+    action: Action,
+    now: i64,
+    identity_issuer: Option<&str>,
+    required_scope: Option<&str>,
+) -> Result<Authorized, ApiError> {
+    let invalid = ApiError::invalid_token;
+    if reply["contractVersion"] != "resource-authorization/1" {
+        return Err(invalid());
+    }
+    match reply["subjectMode"].as_str() {
+        Some("USER") => {}
+        Some("MACHINE") => {
+            return Err(ApiError::new(
+                403,
+                "SUBJECT_MODE_DENIED",
+                "门店业务需要当前员工和 STORE 组织证明，不接受机器身份",
+            ))
         }
-        let expires_at = (exp as i128) * 1000;
-        if intro.get("active")?.as_bool() != Some(true)
-            || intro.get("aud")?.as_str() != Some("stores")
-            || intro.get("token_type")?.as_str() != Some("Bearer")
-            || expires_at <= i128::from(now)
-        {
-            return None;
-        }
-        Some(TokenIdentity {
-            user: id(intro.get("sub")?)?,
-            tenant: id(intro.get("tenant_id")?)?,
-            organization: id(intro.get("organization_id")?)?,
-            expires_at,
+        _ => return Err(invalid()),
+    }
+    let issuer = reply["issuer"].as_str().ok_or_else(invalid)?;
+    let token_use = reply["tokenUse"].as_str().ok_or_else(invalid)?;
+    let intro = &reply["introspection"];
+    let context = &reply["context"];
+    let target_application = reply["targetApplicationId"]
+        .as_str()
+        .and_then(|raw| crate::domain::uuid(raw).ok())
+        .ok_or_else(invalid)?;
+    if reply["resource"] != "stores"
+        || reply["audience"] != "stores"
+        || reply["action"] != action.as_str()
+        || intro["active"] != true
+        || intro["token_type"] != "Bearer"
+        || intro["aud"] != "stores"
+        || intro["iss"] != issuer
+        || intro["token_use"] != token_use
+        || context.pointer("/application/id").and_then(id) != Some(target_application)
+        || reply.get("delegation").is_some()
+        || reply.get("credentialVersion").is_some()
+    {
+        return Err(invalid());
+    }
+    let client = intro["client_id"]
+        .as_str()
+        .filter(|raw| !raw.is_empty())
+        .ok_or_else(invalid)?;
+    let scope = intro["scope"]
+        .as_str()
+        .filter(|raw| {
+            !raw.is_empty()
+                && raw.len() <= 8192
+                && raw
+                    .bytes()
+                    .all(|byte| byte == b' ' || (0x21..=0x7e).contains(&byte))
         })
+        .ok_or_else(invalid)?;
+    let scopes = scope.split(' ').collect::<BTreeSet<_>>();
+    if scopes
+        .iter()
+        .any(|value| value.is_empty() || value.len() > 128)
+        || scopes.len() != scope.split(' ').count()
+    {
+        return Err(invalid());
+    }
+    let source_application = match token_use {
+        "app_session"
+            if issuer == "urn:saas:platform:internal-capabilities"
+                && client == "stores"
+                && scope == "app:access"
+                && reply.get("clientId").is_none()
+                && reply.get("sourceApplicationId").is_none() =>
+        {
+            None
+        }
+        "access_token" if identity_issuer == Some(issuer) => {
+            if !required_scope.is_some_and(|required| scopes.contains(required)) {
+                return Err(invalid());
+            }
+            let caller = reply["clientId"]
+                .as_str()
+                .and_then(|raw| crate::domain::uuid(raw).ok())
+                .ok_or_else(invalid)?;
+            if intro["client_id"].as_str() != Some(caller.to_string().as_str())
+                || intro["sub"].as_str().is_none_or(|raw| {
+                    raw.is_empty() || raw.len() > 1024 || raw.chars().any(char::is_control)
+                })
+            {
+                return Err(invalid());
+            }
+            Some(
+                reply["sourceApplicationId"]
+                    .as_str()
+                    .and_then(|raw| crate::domain::uuid(raw).ok())
+                    .ok_or_else(invalid)?,
+            )
+        }
+        _ => return Err(invalid()),
     };
-    parse().ok_or_else(ApiError::invalid_token)
+    let principal: UserPrincipal =
+        serde_json::from_value(reply["principal"].clone()).map_err(|_| invalid())?;
+    if principal.member_type != "EMPLOYEE" {
+        return Err(ApiError::new(
+            403,
+            "SUBJECT_MODE_DENIED",
+            "门店业务仅接受当前员工身份",
+        ));
+    }
+    let membership = crate::domain::uuid(&principal.membership_id).map_err(|_| invalid())?;
+    let account_version = positive_version(&principal.account_version).ok_or_else(invalid)?;
+    let identity_version = positive_version(&principal.identity_version).ok_or_else(invalid)?;
+    let reply_expiry = reply["expiresAt"]
+        .as_str()
+        .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
+        .map(|date| date.timestamp_millis())
+        .ok_or_else(invalid)?;
+    let token_expiry = intro["exp"]
+        .as_i64()
+        .and_then(|seconds| seconds.checked_mul(1000))
+        .ok_or_else(invalid)?;
+    if reply_expiry <= now
+        || reply_expiry > now.saturating_add(30_000)
+        || token_expiry <= now
+        || reply_expiry > token_expiry.saturating_add(999)
+    {
+        return Err(invalid());
+    }
+    let identity = TokenIdentity {
+        user: crate::domain::uuid(&principal.user_id).map_err(|_| invalid())?,
+        tenant: crate::domain::uuid(&principal.tenant_id).map_err(|_| invalid())?,
+        organization: crate::domain::uuid(&principal.organization_id).map_err(|_| invalid())?,
+        expires_at: i128::from(reply_expiry.min(token_expiry.saturating_add(999))),
+    };
+    let mut authorized = validate_context(&identity, context, resource, action, now)?;
+    // The context's advertised deadline cannot extend its enclosing authority.
+    authorized.expires_at = authorized.expires_at.min(reply_expiry).min(token_expiry);
+    authorized.authority = Some(AuthorityBinding {
+        issuer: issuer.into(),
+        token_use: token_use.into(),
+        client: client.into(),
+        source_application,
+        target_application,
+        membership,
+        account_version,
+        identity_version,
+        scope: scope.into(),
+    });
+    authorized.assert_fresh()?;
+    Ok(authorized)
 }
 
 pub(super) fn validate_context(
@@ -314,6 +491,7 @@ pub(super) fn validate_context(
         expires_at: effective_expiry,
         context_version: hash.to_owned(),
         organization_deadline: None,
+        authority: None,
     })
 }
 

@@ -13,20 +13,6 @@
     "sortOrder": 110,
     "status": "ENABLED"
   },
-  "oauthClient": {
-    "clientName": "stores-client",
-    "clientType": "CONFIDENTIAL",
-    "grantTypes": [
-      "client_credentials"
-    ],
-    "scopes": [
-      "openid"
-    ],
-    "redirectUris": [],
-    "accessTokenValidity": 300,
-    "refreshTokenValidity": 300,
-    "provisioning": "Administrator creates client in the platform UI and stores its generated clientId and one-time secret in the server secret store."
-  },
   "menus": [
     {
       "key": "root",

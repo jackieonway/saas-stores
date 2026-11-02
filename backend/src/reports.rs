@@ -429,9 +429,15 @@ pub(crate) async fn create(
     call.auth.assert_fresh()?;
     let response = record(row)?;
     audit(call, &mut transaction, id, organization_id, "create").await?;
+    let checkpoint = call
+        .authorizer
+        .revalidate_write(call.auth, call.token, organization_id, call.request_id)
+        .await?;
     call.auth.assert_fresh()?;
+    checkpoint.assert_fresh()?;
     transaction.commit().await.map_err(|_| create_unknown())?;
     call.auth.assert_fresh().map_err(|_| create_unknown())?;
+    checkpoint.assert_fresh().map_err(|_| create_unknown())?;
     Ok(response)
 }
 
@@ -489,9 +495,15 @@ pub(crate) async fn update(call: &Call<'_>, id: &str, body: Value) -> Result<Val
     call.auth.assert_fresh()?;
     let response = record(row)?;
     audit(call, &mut transaction, id, organization_id, "update").await?;
+    let checkpoint = call
+        .authorizer
+        .revalidate_write(call.auth, call.token, organization_id, call.request_id)
+        .await?;
     call.auth.assert_fresh()?;
+    checkpoint.assert_fresh()?;
     transaction.commit().await.map_err(|_| commit_unknown())?;
     call.auth.assert_fresh().map_err(|_| commit_unknown())?;
+    checkpoint.assert_fresh().map_err(|_| commit_unknown())?;
     Ok(response)
 }
 

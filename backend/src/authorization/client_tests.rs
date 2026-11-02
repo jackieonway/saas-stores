@@ -24,10 +24,9 @@ const USER: &str = "11111111-1111-7111-8111-111111111111";
 
 #[tokio::test]
 async fn combined_transport_is_bound_bounded_and_never_falls_back() {
-    let body=json!({"contractVersion":"1.0","introspection":{"active":true},"context":{"appCode":"stores"}}).to_string();
+    let body=json!({"contractVersion":"resource-authorization/1","subjectMode":"USER","principal":{},"introspection":{"active":true},"context":{"appCode":"stores"}}).to_string();
     let peer = HttpPeer::start(reply(200, Some("application/json"), body.as_bytes()));
     let mut settings = peer.settings();
-    settings.legacy_authorization = false;
     let client = PlatformClient::new(&settings).unwrap();
     for _ in 0..2 {
         client
@@ -60,6 +59,15 @@ async fn combined_transport_is_bound_bounded_and_never_falls_back() {
         .authorization_pair(TOKEN, "store", "create", REQUEST_ID)
         .await
         .is_err());
+    assert_eq!(peer.captured().len(), 1);
+    let peer=HttpPeer::start(reply(200,Some("application/json"),br#"{"contractVersion":"resource-authorization/1","subjectMode":"MACHINE","delegation":{}}"#));
+    settings.origin = url::Url::parse(&peer.origin).unwrap();
+    let error = PlatformClient::new(&settings)
+        .unwrap()
+        .authorization_pair(TOKEN, "store", "create", REQUEST_ID)
+        .await
+        .unwrap_err();
+    assert_eq!((error.status(), error.code()), (403, "SUBJECT_MODE_DENIED"));
     assert_eq!(peer.captured().len(), 1);
     for (upstream, expected) in [
         ("OPERATION_DENIED", "OPERATION_DENIED"),
@@ -165,8 +173,9 @@ impl HttpPeer {
 
     fn settings(&self) -> PlatformConfig {
         PlatformConfig {
-            legacy_authorization: true,
             origin: url::Url::parse(&self.origin).unwrap(),
+            identity_issuer: Some("https://identity.test".into()),
+            resource_scope_bindings: BTreeMap::new(),
             client_id: "stores-client".into(),
             client_secret: SECRET.into(),
             timeout: Duration::from_secs(1),
@@ -248,11 +257,6 @@ fn reply(status: u16, content_type: Option<&str>, body: &[u8]) -> Vec<u8> {
     bytes
 }
 
-fn query(request: &CapturedRequest) -> BTreeMap<String, String> {
-    let target = url::Url::parse(&format!("http://loopback.test{}", request.target)).unwrap();
-    target.query_pairs().into_owned().collect()
-}
-
 fn assert_safe(error: ApiError) {
     let text = format!("{error} {error:?} {}", error.message());
     for private in [TOKEN, SECRET, "PRIVATE_UPSTREAM_DETAIL", "private.invalid"] {
@@ -262,10 +266,11 @@ fn assert_safe(error: ApiError) {
 
 #[derive(Clone, Copy)]
 enum CallKind {
-    Introspection,
-    Context,
+    Authorization,
     Member,
     Members,
+    Organization,
+    Organizations,
 }
 
 async fn call(
@@ -275,8 +280,11 @@ async fn call(
 ) -> Result<Value, ApiError> {
     let organization = Uuid::parse_str(ORGANIZATION).unwrap();
     match kind {
-        CallKind::Introspection => client.introspect(TOKEN, request_id).await,
-        CallKind::Context => client.context(TOKEN, request_id).await,
+        CallKind::Authorization => {
+            client
+                .authorization_pair(TOKEN, "store", "read", request_id)
+                .await
+        }
         CallKind::Member => {
             client
                 .member(
@@ -303,82 +311,143 @@ async fn call(
                 )
                 .await
         }
+        CallKind::Organization => {
+            client
+                .organization(
+                    TOKEN,
+                    Resource::Store,
+                    Action::Read,
+                    organization,
+                    request_id,
+                )
+                .await
+        }
+        CallKind::Organizations => {
+            client
+                .organizations(
+                    TOKEN,
+                    Resource::Store,
+                    Action::Read,
+                    2,
+                    50,
+                    "李 四&scope=TENANT",
+                    request_id,
+                )
+                .await
+        }
     }
 }
 
 #[tokio::test]
-async fn requests_use_fixed_stores_paths_and_the_correct_basic_or_bearer_identity() {
-    let peer = HttpPeer::start(reply(200, Some("application/json"), b"{}"));
-    let client = PlatformClient::new(&peer.settings()).unwrap();
-    for kind in [
-        CallKind::Introspection,
-        CallKind::Context,
-        CallKind::Member,
-        CallKind::Members,
+async fn private_directories_use_basic_post_forms_and_preserve_the_envelope_deadline() {
+    for (directory, kinds, paths) in [
+        (
+            "members",
+            [CallKind::Member, CallKind::Members],
+            [
+                format!("/internal/platform/apps/stores/members/{USER}"),
+                "/internal/platform/apps/stores/members".into(),
+            ],
+        ),
+        (
+            "organizations",
+            [CallKind::Organization, CallKind::Organizations],
+            [
+                format!("/internal/platform/apps/stores/organizations/{ORGANIZATION}"),
+                "/internal/platform/apps/stores/organizations".into(),
+            ],
+        ),
     ] {
-        assert_eq!(call(&client, kind, REQUEST_ID).await.unwrap(), json!({}));
-    }
-    let requests = peer.captured();
-    assert_eq!(requests.len(), 4);
-    assert_eq!(requests[0].method, "POST");
-    assert_eq!(requests[0].target, "/oauth/introspect");
-    assert_eq!(
-        requests[0].headers["authorization"],
-        "Basic c3RvcmVzLWNsaWVudDpDTElFTlRfU0VDUkVUX05PVF9GT1JfTE9HUw=="
-    );
-    assert_eq!(
-        requests[0].headers["content-type"],
-        "application/x-www-form-urlencoded"
-    );
-    let form: BTreeMap<_, _> = url::form_urlencoded::parse(&requests[0].body)
-        .into_owned()
-        .collect();
-    assert_eq!(form, BTreeMap::from([("token".into(), TOKEN.into())]));
-    assert_eq!(requests[1].target, "/api/apps/stores/context");
-    assert_eq!(
-        requests[2].target.split('?').next().unwrap(),
-        format!("/api/apps/stores/members/{USER}")
-    );
-    assert_eq!(
-        query(&requests[2]),
-        BTreeMap::from([
-            ("resource".into(), "store".into()),
-            ("action".into(), "update".into()),
-            ("organizationId".into(), ORGANIZATION.into()),
-        ])
-    );
-    assert_eq!(
-        requests[3].target.split('?').next().unwrap(),
-        "/api/apps/stores/members"
-    );
-    assert_eq!(
-        query(&requests[3]),
-        BTreeMap::from([
-            ("resource".into(), "store-staff".into()),
-            ("action".into(), "read".into()),
-            ("organizationId".into(), ORGANIZATION.into()),
-            ("page".into(), "2".into()),
-            ("size".into(), "50".into()),
-            ("q".into(), "李 四&scope=TENANT".into()),
-        ])
-    );
-    for request in &requests {
-        assert_eq!(request.headers["accept"], "application/json");
-        assert_eq!(request.headers["x-request-id"], REQUEST_ID.to_lowercase());
-        assert!(!request.target.contains("work-orders"));
-        assert!(!request.target.contains(TOKEN));
-    }
-    for request in &requests[1..] {
-        assert_eq!(request.method, "GET");
-        assert_eq!(request.headers["authorization"], format!("Bearer {TOKEN}"));
-        assert!(request.body.is_empty());
-        assert!(!format!("{:?}", request.headers).contains(SECRET));
+        let end = chrono::Utc::now() + chrono::Duration::seconds(2);
+        let body=json!({"contractVersion":"resource-directory/1","directory":directory,"expiresAt":end.to_rfc3339(),"data":{"expiresAt":(end+chrono::Duration::seconds(1)).to_rfc3339()}}).to_string();
+        let peer = HttpPeer::start(reply(200, Some("application/json"), body.as_bytes()));
+        let client = PlatformClient::new(&peer.settings()).unwrap();
+        for kind in kinds {
+            let data = call(&client, kind, REQUEST_ID).await.unwrap();
+            assert_eq!(
+                chrono::DateTime::parse_from_rfc3339(data["expiresAt"].as_str().unwrap())
+                    .unwrap()
+                    .timestamp_millis(),
+                end.timestamp_millis()
+            );
+        }
+        let requests = peer.captured();
+        assert_eq!(requests.len(), 2);
+        for (request, path) in requests.iter().zip(paths) {
+            assert_eq!(request.method, "POST");
+            assert_eq!(request.target, path);
+            assert_eq!(
+                request.headers["authorization"],
+                "Basic c3RvcmVzLWNsaWVudDpDTElFTlRfU0VDUkVUX05PVF9GT1JfTE9HUw=="
+            );
+            assert_eq!(
+                request.headers["content-type"],
+                "application/x-www-form-urlencoded"
+            );
+            assert_eq!(request.headers["accept"], "application/json");
+            assert_eq!(request.headers["x-request-id"], REQUEST_ID.to_lowercase());
+            assert!(!request.target.contains('?'));
+            assert!(!request.target.contains(TOKEN));
+            let form = url::form_urlencoded::parse(&request.body)
+                .into_owned()
+                .collect::<BTreeMap<_, _>>();
+            assert_eq!(form["token"], TOKEN);
+            if directory == "members" {
+                assert_eq!(form["organizationId"], ORGANIZATION);
+            }
+            if request.target.ends_with(directory) {
+                assert_eq!(form["q"], "李 四&scope=TENANT");
+                assert_eq!(form["page"], "2");
+                assert_eq!(form["size"], "50");
+            }
+        }
     }
 }
 
+#[test]
+fn private_directory_envelope_rejects_wrong_contract_purpose_or_deadline() {
+    let now = chrono::Utc::now();
+    let baseline = json!({"contractVersion":"resource-directory/1","directory":"members","expiresAt":(now+chrono::Duration::seconds(2)).to_rfc3339(),"data":{}});
+    for (field, replacement) in [
+        ("contractVersion", json!("1.0")),
+        ("directory", json!("organizations")),
+        (
+            "expiresAt",
+            json!((now - chrono::Duration::seconds(1)).to_rfc3339()),
+        ),
+        (
+            "expiresAt",
+            json!((now + chrono::Duration::seconds(4)).to_rfc3339()),
+        ),
+        ("expiresAt", json!("not-a-date")),
+        ("data", json!([])),
+        ("unexpected", json!(true)),
+    ] {
+        let mut changed = baseline.clone();
+        changed[field] = replacement;
+        assert_eq!(
+            directory_data(changed, "members").unwrap_err().status(),
+            503
+        );
+    }
+    let end = now + chrono::Duration::milliseconds(800);
+    let mut short = baseline.clone();
+    short["data"] = json!({"expiresAt":end.to_rfc3339()});
+    let data = directory_data(short, "members").unwrap();
+    assert_eq!(
+        chrono::DateTime::parse_from_rfc3339(data["expiresAt"].as_str().unwrap())
+            .unwrap()
+            .timestamp_millis(),
+        end.timestamp_millis()
+    );
+    let mut missing = baseline;
+    missing["directory"] = json!("organizations");
+    assert!(directory_data(missing, "organizations").is_err());
+}
 #[tokio::test]
 async fn arbitrary_or_legacy_request_ids_are_regenerated_as_v7_before_upstream_calls() {
-    let peer = HttpPeer::start(reply(200, Some("application/json"), b"{}"));
+    let body = authorization_body(0);
+    let peer = HttpPeer::start(reply(200, Some("application/json"), &body));
     let client = PlatformClient::new(&peer.settings()).unwrap();
     for request_id in [
         "not-a-uuid",
@@ -387,7 +456,9 @@ async fn arbitrary_or_legacy_request_ids_are_regenerated_as_v7_before_upstream_c
         "aaaaaaaa-6666-4666-8666-666666666666", // Intentional v4 negative fixture.
         "aaaaaaaa-6666-7666-c666-666666666666", // Wrong variant despite version 7.
     ] {
-        call(&client, CallKind::Context, request_id).await.unwrap();
+        call(&client, CallKind::Authorization, request_id)
+            .await
+            .unwrap();
     }
     let requests = peer.captured();
     assert_eq!(requests.len(), 5);
@@ -399,16 +470,23 @@ async fn arbitrary_or_legacy_request_ids_are_regenerated_as_v7_before_upstream_c
 #[tokio::test]
 async fn upstream_statuses_map_to_fixed_errors_without_echoing_private_bodies() {
     let body = format!("{TOKEN} {SECRET} PRIVATE_UPSTREAM_DETAIL https://private.invalid");
-    for kind in [
-        CallKind::Introspection,
-        CallKind::Context,
-        CallKind::Member,
-        CallKind::Members,
-    ] {
+    for kind in [CallKind::Authorization, CallKind::Member, CallKind::Members] {
         for (status, expected_status, expected_code) in [
             (400, 400, "VALIDATION_ERROR"),
             (401, 401, "INVALID_APP_TOKEN"),
-            (403, 403, "DATA_DENIED"),
+            (
+                403,
+                if matches!(kind, CallKind::Authorization) {
+                    503
+                } else {
+                    403
+                },
+                if matches!(kind, CallKind::Authorization) {
+                    "PLATFORM_UNAVAILABLE"
+                } else {
+                    "DATA_DENIED"
+                },
+            ),
             (
                 404,
                 if matches!(kind, CallKind::Member) {
@@ -452,26 +530,34 @@ async fn successful_http_requires_json_media_type_and_well_formed_json() {
     ] {
         let peer = HttpPeer::start(reply(200, media, body));
         let client = PlatformClient::new(&peer.settings()).unwrap();
-        let error = call(&client, CallKind::Context, REQUEST_ID)
+        let error = call(&client, CallKind::Authorization, REQUEST_ID)
             .await
             .unwrap_err();
         assert_eq!(error.code(), "PLATFORM_UNAVAILABLE");
         assert_safe(error);
     }
-    let peer = HttpPeer::start(reply(200, Some("Application/JSON; charset=utf-8"), b"{}"));
+    let body = authorization_body(0);
+    let peer = HttpPeer::start(reply(200, Some("Application/JSON; charset=utf-8"), &body));
     let client = PlatformClient::new(&peer.settings()).unwrap();
     assert_eq!(
-        call(&client, CallKind::Context, REQUEST_ID).await.unwrap(),
-        json!({})
+        call(&client, CallKind::Authorization, REQUEST_ID)
+            .await
+            .unwrap(),
+        serde_json::from_slice::<Value>(&body).unwrap()
     );
 }
 
+fn authorization_body(padding: usize) -> Vec<u8> {
+    serde_json::to_vec(
+        &json!({"contractVersion":"resource-authorization/1","subjectMode":"USER",
+        "principal":{},"introspection":{},"context":{"padding":"a".repeat(padding)}}),
+    )
+    .unwrap()
+}
+
 fn json_of_size(length: usize) -> Vec<u8> {
-    let mut body = Vec::with_capacity(length);
-    body.push(b'"');
-    body.resize(length - 1, b'a');
-    body.push(b'"');
-    body
+    let overhead = authorization_body(0).len();
+    authorization_body(length - overhead)
 }
 
 fn chunked(body: &[u8]) -> Vec<u8> {
@@ -493,7 +579,7 @@ async fn body_limit_checks_declared_lengths_and_cumulative_chunked_bytes() {
         let peer = HttpPeer::start(bytes);
         let client = PlatformClient::new(&peer.settings()).unwrap();
         assert_eq!(
-            call(&client, CallKind::Context, REQUEST_ID)
+            call(&client, CallKind::Authorization, REQUEST_ID)
                 .await
                 .unwrap_err()
                 .code(),
@@ -506,15 +592,20 @@ async fn body_limit_checks_declared_lengths_and_cumulative_chunked_bytes() {
     ] {
         let peer = HttpPeer::start(bytes);
         let client = PlatformClient::new(&peer.settings()).unwrap();
-        let value = call(&client, CallKind::Context, REQUEST_ID).await.unwrap();
-        assert_eq!(value.as_str().unwrap().len(), MAX_BODY - 2);
+        let value = call(&client, CallKind::Authorization, REQUEST_ID)
+            .await
+            .unwrap();
+        assert_eq!(
+            value["context"]["padding"].as_str().unwrap().len(),
+            MAX_BODY - authorization_body(0).len()
+        );
     }
 }
 
 #[tokio::test]
 async fn redirects_cannot_forward_basic_credentials_or_bearer_tokens() {
     let target = HttpPeer::start(reply(200, Some("application/json"), b"{}"));
-    for (kind, status) in [(CallKind::Introspection, 307), (CallKind::Context, 302)] {
+    for (kind, status) in [(CallKind::Authorization, 307), (CallKind::Members, 302)] {
         let wire = format!("HTTP/1.1 {status} Redirect\r\nLocation: {}/escaped\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", target.origin).into_bytes();
         let peer = HttpPeer::start(wire);
         let client = PlatformClient::new(&peer.settings()).unwrap();
@@ -530,7 +621,7 @@ async fn redirects_cannot_forward_basic_credentials_or_bearer_tokens() {
 async fn connection_failure_is_not_retried_and_body_reads_use_the_call_timeout() {
     let peer = HttpPeer::start(Vec::new());
     let client = PlatformClient::new(&peer.settings()).unwrap();
-    let error = call(&client, CallKind::Introspection, REQUEST_ID)
+    let error = call(&client, CallKind::Authorization, REQUEST_ID)
         .await
         .unwrap_err();
     assert_eq!(error.code(), "PLATFORM_UNAVAILABLE");
@@ -544,7 +635,7 @@ async fn connection_failure_is_not_retried_and_body_reads_use_the_call_timeout()
     let mut settings = slow.settings();
     settings.timeout = Duration::from_millis(50);
     let client = PlatformClient::new(&settings).unwrap();
-    let error = call(&client, CallKind::Context, REQUEST_ID)
+    let error = call(&client, CallKind::Authorization, REQUEST_ID)
         .await
         .unwrap_err();
     assert_eq!(error.code(), "PLATFORM_UNAVAILABLE");

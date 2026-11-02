@@ -6,8 +6,6 @@ fn auth(resource: Resource, action: Action, user: Uuid) -> Authorized {
     let now = policy::now_millis();
     let tenant = Uuid::from_u128(0x01900000000070008000000000000000 + 2);
     let org = Uuid::from_u128(0x01900000000070008000000000000000 + 3);
-    let intro = json!({"active":true,"aud":"stores","sub":user,"tenant_id":tenant,
-        "organization_id":org,"token_type":"Bearer","exp":now/1000+120});
     let context = json!({"contractVersion":"1.0","appCode":"stores","contextVersion":"a".repeat(64),
         "expiresAt":chrono::DateTime::from_timestamp_millis(now+20_000).unwrap().to_rfc3339(),
         "user":{"id":user},"tenant":{"id":tenant},"organization":{"id":org},
@@ -15,14 +13,13 @@ fn auth(resource: Resource, action: Action, user: Uuid) -> Authorized {
         "permissions":[format!("{}:{}",resource.as_str(),action.as_str())],
         "dataGrants":[{"resource":resource.as_str(),"action":action.as_str(),"tenantId":tenant,
         "subjectUserId":user,"scope":"ORG","organizationIds":[org]}]});
-    policy::validate_context(
-        &policy::validate_intro(&intro, now).unwrap(),
-        &context,
-        resource,
-        action,
-        now,
-    )
-    .unwrap()
+    let mut reply = crate::authorization::tests::resource_reply(now, resource, action);
+    reply["targetApplicationId"] = context["application"]["id"].clone();
+    reply["context"] = context;
+    reply["principal"]["userId"] = json!(user);
+    reply["principal"]["tenantId"] = json!(tenant);
+    reply["principal"]["organizationId"] = json!(org);
+    policy::validate_authorization(&reply, resource, action, now, None, None).unwrap()
 }
 
 #[test]

@@ -7,6 +7,10 @@ pub enum ConfigError {
     MetricsToken,
     /// The selected authorization protocol is unsupported.
     AuthorizationMode,
+    /// The canonical external identity issuer is not an exact trusted origin.
+    IdentityIssuer,
+    /// An external operation scope binding is malformed, duplicated or unsupported.
+    ResourceScopeBindings,
     /// The independent PostgreSQL URL is missing, ambiguous, or unsupported.
     DatabaseUrl,
     /// Database TLS configuration contains an unsupported SSL mode.
@@ -35,14 +39,16 @@ impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MetricsToken => f.write_str("metrics token must be a bounded non-whitespace credential"),
-            Self::AuthorizationMode => f.write_str("PLATFORM_AUTHORIZATION_MODE must be combined or legacy"),
+            Self::AuthorizationMode => f.write_str("PLATFORM_AUTHORIZATION_MODE must be combined"),
+            Self::IdentityIssuer => f.write_str("PLATFORM_IDENTITY_ISSUER must be an exact HTTPS origin (development permits loopback HTTP)"),
+            Self::ResourceScopeBindings => f.write_str("PLATFORM_RESOURCE_SCOPE_BINDINGS must map supported operations to reviewed OAuth scopes"),
             Self::DatabaseUrl => f.write_str("STORES_DATABASE_URL must explicitly identify the independent PostgreSQL database"),
             Self::DatabaseTls => f.write_str("database TLS configuration contains an unsupported SSL mode"),
             Self::DatabaseInitMode => f.write_str("STORES_DATABASE_INIT_MODE must be seed or imported; import requires stores-migrate --import"),
             Self::ImportReceipt => f.write_str("STORES imported database receipt configuration is invalid"),
             Self::Host => f.write_str("STORES_HOST must be a numeric bind address"),
             Self::PlatformOrigin => f.write_str("PLATFORM_API_ORIGIN must be an exact HTTPS origin (development permits loopback HTTP)"),
-            Self::PlatformClientId => f.write_str("PLATFORM_CLIENT_ID must identify the confidential application client"),
+            Self::PlatformClientId => f.write_str("PLATFORM_CLIENT_ID must identify the application APP_RESOURCE service"),
             Self::PlatformClientSecret => f.write_str("PLATFORM_CLIENT_SECRET must contain a valid confidential client secret"),
             Self::AllowedOrigin => f.write_str("STORES_ALLOWED_ORIGINS must explicitly contain exact trusted origins; opaque null origins are not supported"),
             Self::PlatformCa => f.write_str("PLATFORM_CA_CERT_FILE must identify a valid PEM certificate file"),

@@ -5,6 +5,12 @@ STORES_DATABASE_URL=
 PLATFORM_API_ORIGIN=
 PLATFORM_CLIENT_ID=
 PLATFORM_CLIENT_SECRET=
+PLATFORM_AUTHORIZATION_MODE=combined
+# Optional for internal app_session; required to accept canonical external access_token.
+# PLATFORM_IDENTITY_ISSUER=https://identity.example.com
+# External scopes are reviewed bindings, never inferred defaults. Replace these
+# illustrative values with the same approved platform_resource_bindings source.
+# PLATFORM_RESOURCE_SCOPE_BINDINGS={"store:read":"stores:read","store:create":"stores:create","store:update":"stores:update","store-staff:read":"stores:staff:read","store-daily-report:read":"stores:reports:read","store-daily-report:create":"stores:reports:create","store-daily-report:update":"stores:reports:update"}
 
 NODE_ENV=production
 STORES_HOST=127.0.0.1

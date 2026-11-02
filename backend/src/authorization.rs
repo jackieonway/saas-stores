@@ -80,15 +80,47 @@ impl Authorizer {
             .try_acquire_owned()
             .map_err(|_| ApiError::platform_unavailable())?;
         tokio::time::timeout(self.timeout, async {
-            let (intro, context) = self
+            let reply = self
                 .client
                 .authorization_pair(token, resource.as_str(), action.as_str(), request_id)
                 .await?;
-            let identity = policy::validate_intro(&intro, policy::now_millis())?;
-            policy::validate_context(&identity, &context, resource, action, policy::now_millis())
+            policy::validate_authorization(
+                &reply,
+                resource,
+                action,
+                policy::now_millis(),
+                self.client.identity_issuer(),
+                self.client
+                    .required_scope(resource.as_str(), action.as_str()),
+            )
         })
         .await
         .map_err(|_| ApiError::platform_unavailable())?
+    }
+    /// Recheck the original operation before a local mutation commits. The
+    /// STORE reference was loaded before taking business pool/row locks; its
+    /// original absolute window must remain live and is never renewed here.
+    pub(crate) async fn revalidate_write(
+        &self,
+        auth: &Authorized,
+        token: &str,
+        organization: Uuid,
+        request_id: &str,
+    ) -> Result<Authorized, ApiError> {
+        auth.assert_fresh()?;
+        let current = self
+            .authorize(token, auth.resource(), auth.action(), request_id)
+            .await?;
+        if !auth.same_authority(&current) {
+            return Err(ApiError::invalid_context());
+        }
+        if !current.allows_organization_metadata(organization) {
+            return Err(ApiError::data_denied());
+        }
+        auth.require_row(organization, auth.user_id())?;
+        auth.assert_fresh()?;
+        current.assert_fresh()?;
+        Ok(current)
     }
     pub(crate) async fn verify_member(
         &self,
@@ -122,6 +154,7 @@ impl Authorizer {
         .await
         .map_err(|_| ApiError::platform_unavailable())??;
         let (returned, display_name) = validate_member(&value, organization)?;
+        let deadline = deadline.min(directory_deadline(&value)?);
         if returned != user {
             return Err(ApiError::platform_unavailable());
         }
@@ -181,9 +214,25 @@ impl Authorizer {
         .map_err(|_| ApiError::platform_unavailable())??;
         auth.assert_fresh()?;
         let result = validate_page(&value, organization, page, size)?;
+        if Instant::now() >= directory_deadline(&value)? {
+            return Err(ApiError::platform_unavailable());
+        }
         auth.assert_fresh()?;
         Ok(result)
     }
+}
+
+fn directory_deadline(value: &Value) -> Result<Instant, ApiError> {
+    let now = policy::now_millis();
+    let end = value["expiresAt"]
+        .as_str()
+        .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
+        .map(|date| date.timestamp_millis())
+        .ok_or_else(ApiError::platform_unavailable)?;
+    if end <= now || end > now.saturating_add(3_000) {
+        return Err(ApiError::platform_unavailable());
+    }
+    Ok(Instant::now() + Duration::from_millis((end - now) as u64))
 }
 
 fn valid_token(token: &str) -> Result<(), ApiError> {

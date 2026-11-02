@@ -7,7 +7,6 @@
   "required": [
     "schemaVersion",
     "application",
-    "oauthClient",
     "menus",
     "grants"
   ],
@@ -66,51 +65,6 @@
         },
         "status": {
           "const": "ENABLED"
-        }
-      }
-    },
-    "oauthClient": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "clientName",
-        "clientType",
-        "grantTypes",
-        "scopes",
-        "redirectUris",
-        "accessTokenValidity",
-        "refreshTokenValidity",
-        "provisioning"
-      ],
-      "properties": {
-        "clientName": {
-          "const": "stores-client"
-        },
-        "clientType": {
-          "const": "CONFIDENTIAL"
-        },
-        "grantTypes": {
-          "const": [
-            "client_credentials"
-          ]
-        },
-        "scopes": {
-          "const": [
-            "openid"
-          ]
-        },
-        "redirectUris": {
-          "const": []
-        },
-        "accessTokenValidity": {
-          "const": 300
-        },
-        "refreshTokenValidity": {
-          "const": 300
-        },
-        "provisioning": {
-          "type": "string",
-          "minLength": 1
         }
       }
     },

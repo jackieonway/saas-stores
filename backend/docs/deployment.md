@@ -19,7 +19,7 @@ API 镜像使用 Rust `1.97.0` 编译，运行镜像为 Debian；静态镜像使
 
 将 `backend/compose.env.example` 复制到仓库外的私有配置，例如 `/srv/saas/private/stores.env`。填写 `POSTGRES_IMAGE`、`STORES_API_IMAGE`、`STORES_FRONTEND_IMAGE`、`STORES_POSTGRES_PASSWORD`、`STORES_DATABASE_URL`、`STORES_ALLOWED_ORIGINS` 和平台三项配置。正式镜像建议用 `registry/name@sha256:...`。
 
-数据库 URL 指向 `stores-postgres:5432/stores`，账号 `stores`，密码按 URI 规则编码。容器内的 `127.0.0.1` 代表自身，不能用它访问宿主平台。`PLATFORM_API_ORIGIN` 必须是 API 可达且证书可信的真实 HTTPS origin。
+数据库 URL 指向 `stores-postgres:5432/stores`，账号 `stores`，密码按 URI 规则编码。容器内的 `127.0.0.1` 代表自身，不能用它访问宿主平台。`PLATFORM_API_ORIGIN` 必须是 API 可达且证书可信的平台私有 HTTPS origin，同时提供准确 `POST /api/apps/stores/authorize` 和 `POST /internal/platform/apps/stores/{members,organizations}[/id]`；仅路由公开应用路径的浏览器网关不能完成此后端协议。私有网关只放行这些必要方法和路径，拒绝凭据 query 参数。
 
 `compose.yml` 从私有 env 文件读取必填 `STORES_ALLOWED_ORIGINS`。qiankun 从平台页面发出的跨域请求，以及携带 Origin 的同源写入，均需放行实际平台来源。例如：
 
@@ -27,11 +27,13 @@ API 镜像使用 Rust `1.97.0` 编译，运行镜像为 Debian；静态镜像使
 STORES_ALLOWED_ORIGINS=https://platform.example.com
 ```
 
-Compose 与 API 配置都拒绝缺失和空值，API 还拒绝 `null`、通配符、非准确 origin 及生产 HTTP。需要 `combined` 授权、其他超时预算或额外 CA 时，可在私有 override 的 `environment` 中显式透传。额外 CA 文件还需只读挂载到容器内，并将 `PLATFORM_CA_CERT_FILE` 指向容器路径。所有选项见 [后端配置](../README.md)。
+Compose 与 API 配置都拒绝缺失和空值，API 还拒绝 `null`、通配符、非准确 origin 及生产 HTTP。生产仅使用 `combined`。接受外部 token 时还须配置准确 `PLATFORM_IDENTITY_ISSUER` 和 `PLATFORM_RESOURCE_SCOPE_BINDINGS`，scope 映射与平台、身份服务使用同一审核配置来源，漂移或缺项失败关闭。需要其他超时预算或额外 CA 时，可在私有 override 的 `environment` 中显式透传。额外 CA 文件还需只读挂载到容器内，并将 `PLATFORM_CA_CERT_FILE` 指向容器路径。所有选项见 [后端配置](../README.md)。
 
 `EDGE_NETWORK_NAME` 指定已有的受控 Docker 私网，默认示例名 `platform-edge`。Compose 会创建自己的内部数据库网络，但不会创建外部 edge 网络或启动平台。可选 `STORES_METRICS_TOKEN` 专用于私网采集。
 
 ## 启动服务
+
+首次启动 API 前，环境 owner 须使用同版本独立 `stores-migrate` 和 owner 连接在专属空库建立当前 `0001` 基线，并完成 owner/runtime 权限交接；运行账号不获得 DDL 或迁移历史写权限。迁移作业必须显式单独执行，不依赖 API 或 Compose 自动建表。NOLOGIN owner 的本机委托连接方式见[独立迁移命令](../README.md)。以下命令用于启动已经完成基线的服务。
 
 从 `backend` 执行：
 
@@ -42,9 +44,9 @@ docker compose --env-file /srv/saas/private/stores.env -f compose.yml ps
 docker compose --env-file /srv/saas/private/stores.env -f compose.yml logs --tail 100 stores-api
 ```
 
-`stores-postgres` 通过健康检查后启动 `stores-api`。服务首次启动应用内嵌迁移，后续启动核验迁移 checksum 与 schema fingerprint。前端默认映射宿主回环 `3014:8080`，API 默认回环 `3031:3031`；`API_PORT`、`FRONTEND_PORT` 可在 env 文件调整。共享 edge 网络允许网关访问容器服务名。
+`stores-postgres` 通过健康检查后启动 `stores-api`。API 每次启动只读核验现有当前迁移 checksum 与 schema fingerprint；没有基线或结构漂移时拒绝，不能为启动而给运行账号 DDL 权限。前端默认映射宿主回环 `3014:8080`，API 默认回环 `3031:3031`；`API_PORT`、`FRONTEND_PORT` 可在 env 文件调整。共享 edge 网络允许网关访问容器服务名。
 
-升级到平台 STORE 方案前备份业务库。新 0002 迁移保留技术 ID、日报和旧关联，先验证 v1 fingerprint，再冻结旧名称修改并禁止旧关联表写入，最后建立 v2 fingerprint。非 STORE 历史映射不会自动改类型或删除；由平台明确创建 / 维护 STORE，再完善对应营业资料。旧程序若依赖名称或 staff 写入将不兼容新约束，回退前必须验证兼容性。
+当前仅支持 canonical `0001` 全新安装，不使用旧 `0002` 升级、历史 checksum 接管或 UUID 搬迁。已有业务数据或旧环境的处置必须单独核对目标与授权，不通过 API 启动修改或重建；平台明确创建 / 维护 STORE 后再完善营业资料。
 
 API 结构校验失败时停止发布，定位历史或迁移差异；不要删除数据库卷或手改 checksum 解决。静态容器 `/healthz` 只证明静态服务工作；业务 readiness 为 `/stores-api/health/ready`。
 

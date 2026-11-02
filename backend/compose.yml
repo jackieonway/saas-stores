@@ -24,8 +24,12 @@ services:
       STORES_ALLOWED_ORIGINS: ${STORES_ALLOWED_ORIGINS:?Set the exact public platform HTTPS origin}
       STORES_METRICS_TOKEN: ${STORES_METRICS_TOKEN:-}
       PLATFORM_API_ORIGIN: ${PLATFORM_API_ORIGIN:?Set the real platform HTTPS origin}
-      PLATFORM_CLIENT_ID: ${PLATFORM_CLIENT_ID:?Set this application's confidential client ID}
+      PLATFORM_CLIENT_ID: ${PLATFORM_CLIENT_ID:?Set the independent APP_RESOURCE service ID}
       PLATFORM_CLIENT_SECRET: ${PLATFORM_CLIENT_SECRET:?Set this application's confidential client secret}
+      PLATFORM_AUTHORIZATION_MODE: combined
+      # Inherit only when configured; an absent issuer admits internal app_session only.
+      PLATFORM_IDENTITY_ISSUER:
+      PLATFORM_RESOURCE_SCOPE_BINDINGS:
     depends_on:
       stores-postgres: {condition: service_healthy}
     ports:

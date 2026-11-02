@@ -22,6 +22,16 @@ fn new_id() -> Uuid {
     Uuid::now_v7()
 }
 
+const FIXTURE_RESOURCE_SCOPE_BINDINGS: &str = r#"{
+    "store:read":"store:read",
+    "store:create":"store:create",
+    "store:update":"store:update",
+    "store-staff:read":"store-staff:read",
+    "store-daily-report:read":"store-daily-report:read",
+    "store-daily-report:create":"store-daily-report:create",
+    "store-daily-report:update":"store-daily-report:update"
+}"#;
+
 fn owned_server(url: &url::Url, owner: &str, local_owner: Option<&str>) -> bool {
     let Some(local_owner) = local_owner else {
         return url.host_str() == Some(format!("{owner}-postgres").as_str());
@@ -292,7 +302,11 @@ struct PlatformFixture {
     pool: PgPool,
     tenant: Uuid,
     actor: Uuid,
+    actor_membership: Uuid,
     other: Uuid,
+    other_membership: Uuid,
+    client: Uuid,
+    source_application: Uuid,
     parent: Uuid,
     active: Uuid,
     excluded: [Uuid; 2],
@@ -305,16 +319,22 @@ struct PlatformFixture {
     members: Mutex<Vec<FixtureMember>>,
     member_reads: Mutex<Vec<(String, String, Option<Uuid>)>>,
     authorization_reads: AtomicUsize,
+    authorization_token_reads: Mutex<std::collections::BTreeMap<String, usize>>,
 }
 
 impl PlatformFixture {
     fn new(pool: PgPool) -> Self {
         let actor = new_id();
+        let actor_membership = new_id();
         Self {
             pool,
             tenant: new_id(),
             actor,
+            actor_membership,
             other: new_id(),
+            other_membership: new_id(),
+            client: new_id(),
+            source_application: new_id(),
             parent: new_id(),
             active: new_id(),
             excluded: [new_id(), new_id()],
@@ -326,13 +346,14 @@ impl PlatformFixture {
             organization_reads: AtomicUsize::new(0),
             members: Mutex::new(vec![FixtureMember {
                 user: actor,
-                membership: new_id(),
+                membership: actor_membership,
                 member_type: FixtureMemberType::Employee,
                 enabled: true,
                 display_name: "Current member",
             }]),
             member_reads: Mutex::new(Vec::new()),
             authorization_reads: AtomicUsize::new(0),
+            authorization_token_reads: Mutex::new(std::collections::BTreeMap::new()),
         }
     }
 
@@ -395,11 +416,37 @@ async fn platform_response(
     use serde_json::json;
     use std::collections::BTreeMap;
 
+    assert!(
+        uri.query().is_none(),
+        "private credentials and lookup fields stay in the POST form"
+    );
+    assert_eq!(headers["authorization"], "Basic Zml4dHVyZTpmaXh0dXJl");
+    assert!(headers["content-type"]
+        .to_str()
+        .unwrap()
+        .starts_with("application/x-www-form-urlencoded"));
+    let fields: BTreeMap<_, _> = url::form_urlencoded::parse(&body).into_owned().collect();
     if uri.path() == "/api/apps/stores/authorize" {
-        assert_eq!(headers["authorization"], "Basic Zml4dHVyZTpmaXh0dXJl");
-        let fields: BTreeMap<_, _> = url::form_urlencoded::parse(&body).into_owned().collect();
         assert_eq!(fields.len(), 3);
         state.authorization_reads.fetch_add(1, Ordering::SeqCst);
+        let token_read = {
+            let mut reads = state.authorization_token_reads.lock().unwrap();
+            let count = reads.entry(fields["token"].clone()).or_default();
+            *count += 1;
+            *count
+        };
+        if token_read > 1
+            && matches!(
+                fields["token"].as_str(),
+                "before-commit-revoked" | "before-commit-unavailable"
+            )
+        {
+            assert_eq!(
+                state.pool.num_idle(),
+                0,
+                "the final source fence must run while the write transaction is still leased"
+            );
+        }
         // Same account, different selected membership: the customer context
         // cannot borrow that account's enabled employee identity or grants.
         if fields["token"] == "customer-token" {
@@ -409,14 +456,48 @@ async fn platform_response(
             )
                 .into_response();
         }
+        if fields["token"] == "disabled-member"
+            || (fields["token"] == "before-commit-revoked" && token_read > 1)
+        {
+            return (
+                axum::http::StatusCode::UNAUTHORIZED,
+                Json(json!({"code":"MEMBERSHIP_DISABLED"})),
+            )
+                .into_response();
+        }
+        if fields["token"] == "source-unavailable"
+            || (fields["token"] == "before-commit-unavailable" && token_read > 1)
+        {
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"code":"SOURCE_UNAVAILABLE"})),
+            )
+                .into_response();
+        }
         assert!(matches!(
             fields["token"].as_str(),
-            "app-token" | "other-token"
+            "app-token"
+                | "other-token"
+                | "machine-token"
+                | "id-token"
+                | "wrong-audience"
+                | "wrong-resource"
+                | "wrong-scope"
+                | "principal-mismatch"
+                | "context-mismatch"
+                | "organization-mismatch"
+                | "before-commit-revoked"
+                | "before-commit-unavailable"
         ));
         let actor = if fields["token"] == "other-token" {
             state.other
         } else {
             state.actor
+        };
+        let membership = if fields["token"] == "other-token" {
+            state.other_membership
+        } else {
+            state.actor_membership
         };
         let resource = &fields["resource"];
         let action = &fields["action"];
@@ -426,10 +507,17 @@ async fn platform_response(
             "TENANT"
         };
         let now = chrono::Utc::now().timestamp_millis();
-        return Json(json!({
-            "contractVersion":"1.0",
-            "introspection":{"active":true,"aud":"stores","sub":actor,"tenant_id":state.tenant,
-                "organization_id":state.parent,"token_type":"Bearer","exp":now/1000+120},
+        let mut reply = json!({
+            "contractVersion":"resource-authorization/1","issuer":"https://identity.example.test",
+            "tokenUse":"access_token","subjectMode":"USER","resource":"stores","action":action,
+            "audience":"stores","targetApplicationId":"55555555-5555-7555-8555-555555555555",
+            "clientId":state.client,"sourceApplicationId":state.source_application,
+            "expiresAt":chrono::DateTime::from_timestamp_millis(now+20_000).unwrap().to_rfc3339(),
+            "principal":{"userId":actor,"membershipId":membership,"memberType":"EMPLOYEE",
+                "identityVersion":"1","accountVersion":"1","tenantId":state.tenant,"organizationId":state.parent},
+            "introspection":{"active":true,"aud":"stores","sub":"opaque-pairwise-subject-never-a-platform-uuid",
+                "scope":format!("stores:{action} {resource}:{action}"),"client_id":state.client,"token_type":"Bearer",
+                "token_use":"access_token","iss":"https://identity.example.test","exp":now/1000+120},
             "context":{"contractVersion":"1.0","appCode":"stores","contextVersion":"a".repeat(64),
                 "expiresAt":chrono::DateTime::from_timestamp_millis(now+20_000).unwrap().to_rfc3339(),
                 "user":{"id":actor},"tenant":{"id":state.tenant},"organization":{"id":state.parent},
@@ -438,13 +526,45 @@ async fn platform_response(
                 "permissions":[format!("{resource}:{action}")],
                 "dataGrants":[{"resource":resource,"action":action,"tenantId":state.tenant,
                     "subjectUserId":actor,"scope":scope,"organizationIds":[]}]}
-        })).into_response();
+        });
+        match fields["token"].as_str() {
+            "machine-token" => {
+                reply["subjectMode"] = json!("MACHINE");
+                reply.as_object_mut().unwrap().remove("principal");
+                reply.as_object_mut().unwrap().remove("context");
+                reply.as_object_mut().unwrap().remove("introspection");
+                reply["credentialVersion"] = json!("1");
+                reply["scope"] = json!([format!("stores:{action}")]);
+                reply["delegation"] = json!({"delegationId":new_id(),"version":"1","targetApplicationId":"55555555-5555-7555-8555-555555555555",
+                    "tenantId":state.tenant,"organizationId":state.active,"resource":resource,"action":action,"scope":"ORG","organizationIds":[state.active]});
+            }
+            "id-token" => {
+                reply["tokenUse"] = json!("id_token");
+                reply["introspection"]["token_use"] = json!("id_token");
+            }
+            "wrong-audience" => {
+                reply["audience"] = json!("work-orders");
+                reply["introspection"]["aud"] = json!("work-orders");
+            }
+            "wrong-resource" => reply["resource"] = json!("work-orders"),
+            "wrong-scope" => reply["introspection"]["scope"] = json!("openid"),
+            "principal-mismatch" => reply["principal"]["userId"] = json!(state.other),
+            "context-mismatch" => reply["context"]["user"]["id"] = json!(state.other),
+            "organization-mismatch" => {
+                reply["principal"]["organizationId"] = json!(state.excluded[0])
+            }
+            _ => {}
+        }
+        return Json(reply).into_response();
     }
-    assert!(headers["authorization"]
-        .to_str()
-        .unwrap()
-        .starts_with("Bearer "));
-    if uri.path().starts_with("/api/apps/stores/organizations") {
+    assert!(matches!(
+        fields["token"].as_str(),
+        "app-token" | "other-token" | "before-commit-revoked" | "before-commit-unavailable"
+    ));
+    if uri
+        .path()
+        .starts_with("/internal/platform/apps/stores/organizations")
+    {
         // All organization HTTP must precede acquiring or locking business rows.
         // This is the same one-connection pool used by the API. Acquiring it
         // here would deadlock if the request retained its connection over HTTP.
@@ -466,11 +586,8 @@ async fn platform_response(
         connection.close().await.unwrap();
         state.organization_reads.fetch_add(1, Ordering::SeqCst);
         let record = state.organization();
-        if uri.path() == "/api/apps/stores/organizations" {
-            let fields: BTreeMap<_, _> =
-                url::form_urlencoded::parse(uri.query().unwrap_or_default().as_bytes())
-                    .into_owned()
-                    .collect();
+        if uri.path() == "/internal/platform/apps/stores/organizations" {
+            assert_eq!(fields.len(), 6);
             let page: u32 = fields["page"].parse().unwrap();
             let size: u32 = fields["size"].parse().unwrap();
             let records = if page == 1 {
@@ -479,21 +596,22 @@ async fn platform_response(
             } else {
                 vec![]
             };
-            return Json(json!({"contractVersion":"1.0","contextVersion":"a".repeat(64),
-                "expiresAt":record["expiresAt"],"records":records,"total":1,"page":page,"size":size})).into_response();
+            let data = json!({"contractVersion":"1.0","contextVersion":"a".repeat(64),
+                "expiresAt":record["expiresAt"],"records":records,"total":1,"page":page,"size":size});
+            return Json(json!({"contractVersion":"resource-directory/1","directory":"organizations","expiresAt":record["expiresAt"],"data":data})).into_response();
         }
         if uri.path().ends_with(&state.active.to_string()) {
+            assert_eq!(fields.len(), 3);
             state.announce_projection(&record);
-            return Json(record).into_response();
+            return Json(json!({"contractVersion":"resource-directory/1","directory":"organizations","expiresAt":record["expiresAt"],"data":record})).into_response();
         }
         // B is non-STORE and C is disabled. Neither can enter a business snapshot.
         return axum::http::StatusCode::NOT_FOUND.into_response();
     }
-    if uri.path().starts_with("/api/apps/stores/members") {
-        let fields: BTreeMap<_, _> =
-            url::form_urlencoded::parse(uri.query().unwrap_or_default().as_bytes())
-                .into_owned()
-                .collect();
+    if uri
+        .path()
+        .starts_with("/internal/platform/apps/stores/members")
+    {
         assert!(matches!(
             (fields["resource"].as_str(), fields["action"].as_str()),
             ("store", "create" | "update") | ("store-staff", "read")
@@ -501,7 +619,7 @@ async fn platform_response(
         assert_eq!(fields["organizationId"], state.active.to_string());
         let user = uri
             .path()
-            .strip_prefix("/api/apps/stores/members/")
+            .strip_prefix("/internal/platform/apps/stores/members/")
             .map(|raw| Uuid::parse_str(raw).unwrap());
         state.member_reads.lock().unwrap().push((
             fields["resource"].clone(),
@@ -510,13 +628,13 @@ async fn platform_response(
         ));
         let members = state.employee_members();
         if let Some(user) = user {
-            assert_eq!(fields.len(), 3);
+            assert_eq!(fields.len(), 4);
             return members.get(&user).map_or_else(
                 || axum::http::StatusCode::NOT_FOUND.into_response(),
-                |record| Json(record.clone()).into_response(),
+                |record| Json(json!({"contractVersion":"resource-directory/1","directory":"members","expiresAt":state.organization()["expiresAt"],"data":record})).into_response(),
             );
         }
-        assert_eq!(fields.len(), 6);
+        assert_eq!(fields.len(), 7);
         let page: u32 = fields["page"].parse().unwrap();
         let size: u32 = fields["size"].parse().unwrap();
         let q = fields["q"].to_lowercase();
@@ -536,7 +654,8 @@ async fn platform_response(
             .skip(((page - 1) * size) as usize)
             .take(size as usize)
             .collect();
-        return Json(json!({"records":records,"total":total,"page":page,"size":size}))
+        return Json(json!({"contractVersion":"resource-directory/1","directory":"members","expiresAt":state.organization()["expiresAt"],
+            "data":{"records":records,"total":total,"page":page,"size":size}}))
             .into_response();
     }
     panic!("unexpected fixture route");
@@ -556,19 +675,25 @@ impl Drop for PlatformServer {
 }
 
 async fn platform_fixture(state: Arc<PlatformFixture>) -> (String, PlatformServer) {
-    use axum::{
-        routing::{get, post},
-        Router,
-    };
+    use axum::{routing::post, Router};
     let app = Router::new()
         .route("/api/apps/stores/authorize", post(platform_response))
-        .route("/api/apps/stores/organizations", get(platform_response))
         .route(
-            "/api/apps/stores/organizations/{id}",
-            get(platform_response),
+            "/internal/platform/apps/stores/organizations",
+            post(platform_response),
         )
-        .route("/api/apps/stores/members", get(platform_response))
-        .route("/api/apps/stores/members/{id}", get(platform_response))
+        .route(
+            "/internal/platform/apps/stores/organizations/{id}",
+            post(platform_response),
+        )
+        .route(
+            "/internal/platform/apps/stores/members",
+            post(platform_response),
+        )
+        .route(
+            "/internal/platform/apps/stores/members/{id}",
+            post(platform_response),
+        )
         .with_state(state);
     if test_http::NodePeer::enabled() {
         let node = test_http::NodePeer::router(app);
@@ -621,7 +746,7 @@ async fn api_call(
 
 #[tokio::test]
 #[ignore = "requires the owned CI PostgreSQL driver"]
-async fn platform_store_snapshot_guards_legacy_http_reads_and_writes() {
+async fn platform_store_snapshot_guards_canonical_http_reads_and_writes() {
     use serde_json::json;
     owned(|pool| async move {
         initialize_database(&pool).await.unwrap();
@@ -645,13 +770,65 @@ async fn platform_store_snapshot_guards_legacy_http_reads_and_writes() {
             .bind(other_report).bind(state.tenant).bind(profiles[0]).bind(state.active).bind(state.other).execute(&pool).await.unwrap();
         initialize_database(&pool).await.unwrap();
         let (origin, _server) = platform_fixture(state.clone()).await;
-        let config = stores_api::Config::from_pairs([
+        let platform_config=|bindings:&str| stores_api::Config::from_pairs([
             ("STORES_DATABASE_URL", "postgresql://fixture:fixture@127.0.0.1/stores"),
             ("STORES_ALLOWED_ORIGINS", "https://platform.example.test"), ("PLATFORM_API_ORIGIN", &origin),
             ("PLATFORM_CLIENT_ID", "fixture"), ("PLATFORM_CLIENT_SECRET", "fixture"),
             ("PLATFORM_AUTHORIZATION_MODE", "combined"),
-        ]).unwrap();
+            ("PLATFORM_IDENTITY_ISSUER", "https://identity.example.test"),
+            ("PLATFORM_RESOURCE_SCOPE_BINDINGS",bindings),
+        ]);
+        let config=platform_config(FIXTURE_RESOURCE_SCOPE_BINDINGS).unwrap();
         let app = stores_api::application(&config, api_pool.clone()).unwrap();
+        let before_rejected = business_snapshot(&pool).await;
+        let organization_reads = state.organization_reads.load(Ordering::SeqCst);
+        let member_reads = state.member_reads.lock().unwrap().len();
+        let authorization_reads = state.authorization_reads.load(Ordering::SeqCst);
+        for (token,expected) in [
+            ("id-token",401),("wrong-audience",401),("wrong-resource",401),
+            ("wrong-scope",401),
+            ("principal-mismatch",401),("context-mismatch",401),("organization-mismatch",401),
+            ("disabled-member",401),("machine-token",403),("source-unavailable",503),
+        ] {
+            for (method,path,body) in [
+                ("GET","/stores-api/stores".to_owned(),None),
+                ("PATCH",format!("/stores-api/stores/{}",profiles[0]),Some(json!({"version":1,"businessContact":"Denied source must not write","managerUserId":null}))),
+            ] {
+                let (status,error)=api_call(&app,method,&path,body,token).await;
+                assert_eq!(status,expected,"{token} {method} {path}: {error}");
+                if token=="machine-token" {assert_eq!(error["code"],"SUBJECT_MODE_DENIED");}
+            }
+        }
+        assert_eq!(state.organization_reads.load(Ordering::SeqCst),organization_reads,
+            "invalid source and MACHINE credentials must not enter the employee STORE directory");
+        assert_eq!(state.member_reads.lock().unwrap().len(),member_reads);
+        assert_eq!(state.authorization_reads.load(Ordering::SeqCst),authorization_reads+20);
+        assert_eq!(business_snapshot(&pool).await,before_rejected);
+        check("canonical_source_token_use_audience_resource_and_principal_matrix_rejects_without_directory_or_business_writes");
+        let mut missing_binding:serde_json::Value=serde_json::from_str(FIXTURE_RESOURCE_SCOPE_BINDINGS).unwrap();
+        missing_binding.as_object_mut().unwrap().remove("store:update");
+        let missing_binding=missing_binding.to_string();
+        let missing_config=platform_config(&missing_binding).unwrap();
+        let missing_app=stores_api::application(&missing_config,api_pool.clone()).unwrap();
+        let organization_reads=state.organization_reads.load(Ordering::SeqCst);
+        let member_reads=state.member_reads.lock().unwrap().len();
+        let (status,error)=api_call(&missing_app,"PATCH",&format!("/stores-api/stores/{}",profiles[0]),
+            Some(json!({"version":1,"businessContact":"Unregistered OAuth scope must not write","managerUserId":null})),"app-token").await;
+        assert_eq!(status,401,"missing independent scope binding: {error}");
+        assert_eq!(state.organization_reads.load(Ordering::SeqCst),organization_reads);
+        assert_eq!(state.member_reads.lock().unwrap().len(),member_reads);
+        assert_eq!(business_snapshot(&pool).await,before_rejected);
+        check("missing_operation_scope_binding_rejects_before_directory_and_business_writes");
+        for (token,expected) in [("before-commit-revoked",401),("before-commit-unavailable",503)] {
+            let (status,error)=api_call(&app,"PATCH",&format!("/stores-api/stores/{}",profiles[0]),
+                Some(json!({"version":1,"businessContact":"Rollback at current-source fence","managerUserId":null})),token).await;
+            assert_eq!(status,expected,"{token}: {error}");
+            assert_eq!(state.authorization_token_reads.lock().unwrap().get(token),Some(&2),
+                "write source must be checked again before commit");
+            assert_eq!(business_snapshot(&pool).await,before_rejected,
+                "source failure at commit must roll back business, version and audit rows");
+        }
+        check("fresh_source_rechecked_after_sql_and_revoke_or_outage_rolls_back_before_commit");
         let before_invalid = business_snapshot(&pool).await;
         for raw in [
             "11111111-1111-4111-8111-111111111111", // Intentional legacy v4 negative fixture.
@@ -866,6 +1043,8 @@ async fn employee_member_candidates_and_manager_writes_preserve_the_user_id_cont
             ("PLATFORM_CLIENT_ID", "fixture"),
             ("PLATFORM_CLIENT_SECRET", "fixture"),
             ("PLATFORM_AUTHORIZATION_MODE", "combined"),
+            ("PLATFORM_IDENTITY_ISSUER", "https://identity.example.test"),
+            ("PLATFORM_RESOURCE_SCOPE_BINDINGS", FIXTURE_RESOURCE_SCOPE_BINDINGS),
         ]).unwrap();
         let app = stores_api::application(&config, api_pool.clone()).unwrap();
 

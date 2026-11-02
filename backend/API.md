@@ -6,6 +6,10 @@
 
 每次业务请求必须携带唯一的 `Authorization: Bearer <stores 应用令牌>`，服务重新校验平台身份、当前应用、资源动作、功能权限和数据授权，再取当前有效 STORE 组织投影。Cookie 不作为身份。业务正文不能设置租户或 owner。
 
+后端以独立 APP_RESOURCE 服务身份调用平台 `POST /api/apps/stores/authorize`，仅消费 `resource-authorization/1`。USER 的账号、成员和代际取自受验证的 `principal`，不解析公共 `introspection.sub`；内部 app_session 使用固定内部 issuer，外部 access_token 的 issuer 必须准确匹配 `PLATFORM_IDENTITY_ISSUER`。缺失来源、错误受众、错误 tokenUse 或身份绑定均拒绝，不回退旧 introspection。MACHINE 当前不能提供门店所需的 STORE 类型与人员审计证明，返回 `403 SUBJECT_MODE_DENIED`。
+
+外部操作还要求 `PLATFORM_RESOURCE_SCOPE_BINDINGS` 为当前 `resource:action` 登记单个准确 OAuth scope，且回复 scope 集合包含它；缺失或不匹配均拒绝。该 JSON 对象与平台 `platform_resource_bindings`、身份资源登记使用同一审核配置来源，服务不猜测注册名。内部应用能力只使用 `app:access`，仍须通过该操作的权限和独立数据授权。
+
 所有列表、总数、详情、日报、汇总和写入同时受租户、组织硬边界、资源动作数据授权及新鲜 STORE 组织集合限制。禁用、到期、非 STORE、无应用授权或范围外组织的历史数据不参与当前结果。历史映射不会自动改类型或删除。
 
 `SELF` 门店行要求 `ownerUserId=当前操作人`，日报行要求录入人为当前操作人；组织元数据的单项解析不证明业务行所有权。已有本人业务行可位于硬边界与 grant 允许的子组织。新建绑定、组织选择和成员查找的 SELF 目标仍仅为当前组织。`ORG`、`ORG_SUBTREE`、`TENANT` 继续与硬边界相交。成员查看、日报使用各自授权，不额外要求 `store:read`。
@@ -68,7 +72,7 @@ CORS 精确匹配必填 `STORES_ALLOWED_ORIGINS`。不支持空配置、`null`�
 `POST /stores` 示例：
 
 ```json
-{"organizationId":"00000000-0000-4000-8000-000000000001","businessStatus":"OPEN","businessContact":"营业电话或说明","managerUserId":null}
+{"organizationId":"019a174e-0000-7000-8000-000000000001","businessStatus":"OPEN","businessContact":"营业电话或说明","managerUserId":null}
 ```
 
 organizationId、businessStatus、businessContact 必填。目标必须是当前允许的有效 STORE。businessStatus 仅 OPEN/CLOSED，businessContact 可为空且最多 200 字符。managerUserId 可省略、为 null 或当前有效直接成员 UUID；它是营业联系人，不代表平台组织负责人，也不改变业务 owner。

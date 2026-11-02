@@ -4,10 +4,11 @@ use std::sync::{
 };
 
 use axum::{
+    body::Bytes,
     extract::{Path, State},
-    http::{StatusCode, Uri},
+    http::{HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::post,
     Json, Router,
 };
 use serde_json::json;
@@ -23,22 +24,19 @@ const REQUEST: &str = "11111111-1111-7111-8111-111111111111";
 
 fn auth() -> Authorized {
     let now = policy::now_millis();
-    let intro = json!({"active":true,"aud":"stores","token_type":"Bearer","sub":ACTOR,
-        "tenant_id":TENANT,"organization_id":PARENT,"exp":now/1000+120});
     let context = json!({"contractVersion":"1.0","appCode":"stores","contextVersion":"a".repeat(64),
         "expiresAt":chrono::DateTime::from_timestamp_millis(now+20_000).unwrap().to_rfc3339(),
         "user":{"id":ACTOR},"tenant":{"id":TENANT},"organization":{"id":PARENT},
         "application":{"id":Uuid::from_u128(0x01900000000070008000000000000000 + 5)},"organizationScopeIds":[PARENT,CHILD],
         "permissions":["store:read"],"dataGrants":[{"resource":"store","action":"read",
         "tenantId":TENANT,"subjectUserId":ACTOR,"scope":"SELF","organizationIds":[]}]});
-    policy::validate_context(
-        &policy::validate_intro(&intro, now).unwrap(),
-        &context,
-        Resource::Store,
-        Action::Read,
-        now,
-    )
-    .unwrap()
+    let mut reply = crate::authorization::tests::resource_reply(now, Resource::Store, Action::Read);
+    reply["targetApplicationId"] = context["application"]["id"].clone();
+    reply["context"] = context;
+    reply["principal"]["userId"] = json!(ACTOR);
+    reply["principal"]["tenantId"] = json!(TENANT);
+    reply["principal"]["organizationId"] = json!(PARENT);
+    policy::validate_authorization(&reply, Resource::Store, Action::Read, now, None, None).unwrap()
 }
 
 fn organization(id: Uuid) -> Value {
@@ -177,26 +175,83 @@ fn directory_query_and_pages_reject_ambiguous_purposes_counts_and_duplicate_orga
     .is_err());
 }
 
-async fn list_response(State(mode): State<Arc<AtomicU8>>, uri: Uri) -> Json<Value> {
-    let query: std::collections::BTreeMap<_, _> =
-        url::form_urlencoded::parse(uri.query().unwrap_or_default().as_bytes())
-            .into_owned()
-            .collect();
-    assert_eq!(query["resource"], "store");
-    assert_eq!(query["action"], "read");
+fn private_form(
+    headers: &HeaderMap,
+    uri: &Uri,
+    body: &[u8],
+    field_count: usize,
+) -> std::collections::BTreeMap<String, String> {
+    assert!(
+        uri.query().is_none(),
+        "directory credentials and parameters stay in the POST form"
+    );
+    assert_eq!(headers["authorization"], "Basic Y2xpZW50OnNlY3JldA==");
+    assert!(headers["content-type"]
+        .to_str()
+        .unwrap()
+        .starts_with("application/x-www-form-urlencoded"));
+    let fields: std::collections::BTreeMap<_, _> =
+        url::form_urlencoded::parse(body).into_owned().collect();
+    assert_eq!(fields.len(), field_count);
+    assert_eq!(fields["token"], "app-token");
+    assert_eq!(fields["resource"], "store");
+    assert_eq!(fields["action"], "read");
+    fields
+}
+
+fn directory(data: Value, mode: u8) -> Value {
+    let mut envelope = json!({"contractVersion":"resource-directory/1","directory":"organizations","expiresAt":data["expiresAt"],"data":data});
+    match mode {
+        4 => envelope["directory"] = json!("members"),
+        5 => {
+            envelope["expiresAt"] = json!(chrono::DateTime::from_timestamp_millis(
+                policy::now_millis() + 30_000
+            )
+            .unwrap()
+            .to_rfc3339())
+        }
+        6 => {
+            envelope["expiresAt"] = json!(chrono::DateTime::from_timestamp_millis(
+                policy::now_millis() - 1
+            )
+            .unwrap()
+            .to_rfc3339())
+        }
+        _ => {}
+    }
+    envelope
+}
+
+async fn list_response(
+    State(mode): State<Arc<AtomicU8>>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> Json<Value> {
+    let query = private_form(&headers, &uri, &body, 6);
     let id = if mode.load(Ordering::SeqCst) == 1 {
         CHILD
     } else {
         PARENT
     };
-    Json(page(
-        vec![organization(id)],
-        query["page"].parse().unwrap(),
-        query["size"].parse().unwrap(),
+    Json(directory(
+        page(
+            vec![organization(id)],
+            query["page"].parse().unwrap(),
+            query["size"].parse().unwrap(),
+        ),
+        mode.load(Ordering::SeqCst),
     ))
 }
 
-async fn detail_response(State(mode): State<Arc<AtomicU8>>, Path(id): Path<Uuid>) -> Response {
+async fn detail_response(
+    State(mode): State<Arc<AtomicU8>>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    private_form(&headers, &uri, &body, 3);
     if id == PARENT {
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -208,15 +263,21 @@ async fn detail_response(State(mode): State<Arc<AtomicU8>>, Path(id): Path<Uuid>
     if mode == 2 {
         record["contextVersion"] = json!("f".repeat(64));
     }
-    Json(record).into_response()
+    Json(directory(record, mode)).into_response()
 }
 
 #[tokio::test]
 async fn self_uses_known_single_targets_skips_inactive_history_and_rejects_downgrade_and_timeout() {
     let mode = Arc::new(AtomicU8::new(0));
     let app = Router::new()
-        .route("/api/apps/stores/organizations", get(list_response))
-        .route("/api/apps/stores/organizations/{id}", get(detail_response))
+        .route(
+            "/internal/platform/apps/stores/organizations",
+            post(list_response),
+        )
+        .route(
+            "/internal/platform/apps/stores/organizations/{id}",
+            post(detail_response),
+        )
         .with_state(mode.clone());
     let (origin, server) = if super::super::tests::test_http::NodePeer::enabled() {
         let peer = super::super::tests::test_http::NodePeer::router(app);
@@ -246,6 +307,7 @@ async fn self_uses_known_single_targets_skips_inactive_history_and_rejects_downg
         ("PLATFORM_API_ORIGIN", origin.as_str()),
         ("PLATFORM_CLIENT_ID", "client"),
         ("PLATFORM_CLIENT_SECRET", "secret"),
+        ("PLATFORM_IDENTITY_ISSUER", "https://identity.example.test"),
         ("STORES_ALLOWED_ORIGINS", "https://platform.example.test"),
         ("PLATFORM_AUTH_TIMEOUT_MS", "100"),
     ])
@@ -273,6 +335,16 @@ async fn self_uses_known_single_targets_skips_inactive_history_and_rejects_downg
         .store_organizations(&auth, "app-token", Some(&[CHILD]), REQUEST)
         .await
         .is_err());
+    for invalid_envelope in [4, 5, 6] {
+        mode.store(invalid_envelope, Ordering::SeqCst);
+        assert!(
+            service
+                .store_organizations(&auth, "app-token", Some(&[CHILD]), REQUEST)
+                .await
+                .is_err(),
+            "wrong directory domain and invalid outer deadlines fail closed"
+        );
+    }
     mode.store(3, Ordering::SeqCst);
     assert!(service
         .store_organizations(&auth, "app-token", Some(&[CHILD]), REQUEST)

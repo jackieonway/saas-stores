@@ -80,12 +80,7 @@ impl PlatformClient {
         resource: &str,
         action: &str,
         request_id: &str,
-    ) -> Result<(Value, Value), ApiError> {
-        if self.settings.legacy_authorization {
-            let intro = self.introspect(token, request_id).await?;
-            super::policy::validate_intro(&intro, super::policy::now_millis())?;
-            return Ok((intro, self.context(token, request_id).await?));
-        }
+    ) -> Result<Value, ApiError> {
         let url = self
             .settings
             .origin
@@ -101,48 +96,38 @@ impl PlatformClient {
                 ResponseKind::Authorization,
             )
             .await?;
-        if value.get("contractVersion").and_then(Value::as_str) != Some("1.0")
-            || !value["introspection"].is_object()
-            || !value["context"].is_object()
+        if value.get("contractVersion").and_then(Value::as_str) != Some("resource-authorization/1")
         {
             return Err(ApiError::platform_unavailable());
         }
-        Ok((value["introspection"].clone(), value["context"].clone()))
+        if value.get("subjectMode").and_then(Value::as_str) == Some("MACHINE") {
+            // STORE type proof and person-attributed business audit are required
+            // by this service; a machine delegation cannot invent that person.
+            return Err(ApiError::new(
+                403,
+                "SUBJECT_MODE_DENIED",
+                "门店接口需要员工身份与有效门店组织证明",
+            ));
+        }
+        if value.get("subjectMode").and_then(Value::as_str) != Some("USER")
+            || !value["introspection"].is_object()
+            || !value["context"].is_object()
+            || !value["principal"].is_object()
+        {
+            return Err(ApiError::platform_unavailable());
+        }
+        Ok(value)
     }
 
-    pub(super) async fn introspect(
-        &self,
-        token: &str,
-        request_id: &str,
-    ) -> Result<Value, ApiError> {
-        let url = self
-            .settings
-            .origin
-            .join("/oauth/introspect")
-            .map_err(|_| ApiError::platform_unavailable())?;
-        self.json(
-            self.http
-                .post(url)
-                .basic_auth(&self.settings.client_id, Some(&self.settings.client_secret))
-                .form(&[("token", token)]),
-            request_id,
-            ResponseKind::General,
-        )
-        .await
+    pub(super) fn identity_issuer(&self) -> Option<&str> {
+        self.settings.identity_issuer.as_deref()
     }
 
-    pub(super) async fn context(&self, token: &str, request_id: &str) -> Result<Value, ApiError> {
-        let url = self
-            .settings
-            .origin
-            .join("/api/apps/stores/context")
-            .map_err(|_| ApiError::platform_unavailable())?;
-        self.json(
-            self.http.get(url).bearer_auth(token),
-            request_id,
-            ResponseKind::General,
-        )
-        .await
+    pub(super) fn required_scope(&self, resource: &str, action: &str) -> Option<&str> {
+        self.settings
+            .resource_scope_bindings
+            .get(&format!("{resource}:{action}"))
+            .map(String::as_str)
     }
 
     pub(super) async fn member(
@@ -157,16 +142,21 @@ impl PlatformClient {
         let url = self
             .settings
             .origin
-            .join(&format!("/api/apps/stores/members/{user}"))
+            .join(&format!("/internal/platform/apps/stores/members/{user}"))
             .map_err(|_| ApiError::platform_unavailable())?;
-        self.json(
-            self.http.get(url).bearer_auth(token).query(&[
-                ("resource", resource.as_str().to_owned()),
-                ("action", action.as_str().to_owned()),
-                ("organizationId", organization.to_string()),
-            ]),
+        self.directory(
+            self.http
+                .post(url)
+                .basic_auth(&self.settings.client_id, Some(&self.settings.client_secret))
+                .form(&[
+                    ("token", token.to_owned()),
+                    ("resource", resource.as_str().to_owned()),
+                    ("action", action.as_str().to_owned()),
+                    ("organizationId", organization.to_string()),
+                ]),
             request_id,
             ResponseKind::SingleMember,
+            "members",
         )
         .await
     }
@@ -186,19 +176,24 @@ impl PlatformClient {
         let url = self
             .settings
             .origin
-            .join("/api/apps/stores/members")
+            .join("/internal/platform/apps/stores/members")
             .map_err(|_| ApiError::platform_unavailable())?;
-        self.json(
-            self.http.get(url).bearer_auth(token).query(&[
-                ("resource", resource.as_str().to_owned()),
-                ("action", action.as_str().to_owned()),
-                ("organizationId", organization.to_string()),
-                ("page", page.to_string()),
-                ("size", size.to_string()),
-                ("q", q.to_owned()),
-            ]),
+        self.directory(
+            self.http
+                .post(url)
+                .basic_auth(&self.settings.client_id, Some(&self.settings.client_secret))
+                .form(&[
+                    ("token", token.to_owned()),
+                    ("resource", resource.as_str().to_owned()),
+                    ("action", action.as_str().to_owned()),
+                    ("organizationId", organization.to_string()),
+                    ("page", page.to_string()),
+                    ("size", size.to_string()),
+                    ("q", q.to_owned()),
+                ]),
             request_id,
             ResponseKind::General,
+            "members",
         )
         .await
     }
@@ -217,18 +212,23 @@ impl PlatformClient {
         let url = self
             .settings
             .origin
-            .join("/api/apps/stores/organizations")
+            .join("/internal/platform/apps/stores/organizations")
             .map_err(|_| ApiError::platform_unavailable())?;
-        self.json(
-            self.http.get(url).bearer_auth(token).query(&[
-                ("resource", resource.as_str().to_owned()),
-                ("action", action.as_str().to_owned()),
-                ("page", page.to_string()),
-                ("size", size.to_string()),
-                ("q", q.to_owned()),
-            ]),
+        self.directory(
+            self.http
+                .post(url)
+                .basic_auth(&self.settings.client_id, Some(&self.settings.client_secret))
+                .form(&[
+                    ("token", token.to_owned()),
+                    ("resource", resource.as_str().to_owned()),
+                    ("action", action.as_str().to_owned()),
+                    ("page", page.to_string()),
+                    ("size", size.to_string()),
+                    ("q", q.to_owned()),
+                ]),
             request_id,
             ResponseKind::Organization,
+            "organizations",
         )
         .await
     }
@@ -244,17 +244,34 @@ impl PlatformClient {
         let url = self
             .settings
             .origin
-            .join(&format!("/api/apps/stores/organizations/{organization}"))
+            .join(&format!(
+                "/internal/platform/apps/stores/organizations/{organization}"
+            ))
             .map_err(|_| ApiError::platform_unavailable())?;
-        self.json(
+        self.directory(
             self.http
-                .get(url)
-                .bearer_auth(token)
-                .query(&[("resource", resource.as_str()), ("action", action.as_str())]),
+                .post(url)
+                .basic_auth(&self.settings.client_id, Some(&self.settings.client_secret))
+                .form(&[
+                    ("token", token),
+                    ("resource", resource.as_str()),
+                    ("action", action.as_str()),
+                ]),
             request_id,
             ResponseKind::Organization,
+            "organizations",
         )
         .await
+    }
+
+    async fn directory(
+        &self,
+        request: RequestBuilder,
+        request_id: &str,
+        kind: ResponseKind,
+        directory: &str,
+    ) -> Result<Value, ApiError> {
+        directory_data(self.json(request, request_id, kind).await?, directory)
     }
 
     async fn json(
@@ -344,6 +361,48 @@ impl PlatformClient {
         }
         Ok(value)
     }
+}
+
+fn directory_data(mut value: Value, directory: &str) -> Result<Value, ApiError> {
+    let invalid = ApiError::platform_unavailable;
+    let envelope = value.as_object_mut().ok_or_else(invalid)?;
+    if envelope.len() != 4
+        || envelope.get("contractVersion").and_then(Value::as_str) != Some("resource-directory/1")
+        || envelope.get("directory").and_then(Value::as_str) != Some(directory)
+    {
+        return Err(invalid());
+    }
+    let expires_at = envelope
+        .get("expiresAt")
+        .and_then(Value::as_str)
+        .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
+        .ok_or_else(invalid)?;
+    let now = chrono::Utc::now();
+    if expires_at <= now || expires_at > now + chrono::Duration::seconds(3) {
+        return Err(invalid());
+    }
+    let mut data = envelope
+        .remove("data")
+        .filter(Value::is_object)
+        .ok_or_else(invalid)?;
+    let data_fields = data.as_object_mut().ok_or_else(invalid)?;
+    let deadline = match data_fields.get("expiresAt") {
+        Some(raw) => raw
+            .as_str()
+            .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
+            .filter(|deadline| *deadline > now)
+            .ok_or_else(invalid)?
+            .min(expires_at),
+        None if directory == "members" => expires_at,
+        None => return Err(invalid()),
+    };
+    // Preserve the server's earlier source/member deadline when callers retain
+    // a local witness; unwrapping the envelope must never extend its authority.
+    data_fields.insert(
+        "expiresAt".into(),
+        Value::String(deadline.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+    );
+    Ok(data)
 }
 
 // Keep private causes for controlled diagnostics. Normal formatting cannot

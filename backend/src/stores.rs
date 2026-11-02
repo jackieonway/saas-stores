@@ -487,12 +487,18 @@ pub(crate) async fn create(call: &Call<'_>, body: Value) -> Result<Value, ApiErr
     let response = record(call, row)?;
     assert_fresh()?;
     audit(call, &mut transaction, organization, id, "create").await?;
+    let checkpoint = call
+        .authorizer
+        .revalidate_write(call.auth, call.token, organization, call.request_id)
+        .await?;
     assert_fresh()?;
+    checkpoint.assert_fresh()?;
     transaction
         .commit()
         .await
         .map_err(|_| write_unknown(true))?;
     assert_fresh().map_err(|_| write_unknown(true))?;
+    checkpoint.assert_fresh().map_err(|_| write_unknown(true))?;
     Ok(response)
 }
 
@@ -573,12 +579,20 @@ pub(crate) async fn update(call: &Call<'_>, raw_id: &str, body: Value) -> Result
     let response = record(call, row)?;
     assert_fresh()?;
     audit(call, &mut transaction, locked.organization, id, "update").await?;
+    let checkpoint = call
+        .authorizer
+        .revalidate_write(call.auth, call.token, locked.organization, call.request_id)
+        .await?;
     assert_fresh()?;
+    checkpoint.assert_fresh()?;
     transaction
         .commit()
         .await
         .map_err(|_| write_unknown(false))?;
     assert_fresh().map_err(|_| write_unknown(false))?;
+    checkpoint
+        .assert_fresh()
+        .map_err(|_| write_unknown(false))?;
     Ok(response)
 }
 

@@ -46,8 +46,9 @@ pub struct Config {
 
 #[derive(Clone)]
 pub(crate) struct PlatformConfig {
-    pub(crate) legacy_authorization: bool,
     pub(crate) origin: Url,
+    pub(crate) identity_issuer: Option<String>,
+    pub(crate) resource_scope_bindings: BTreeMap<String, String>,
     pub(crate) client_id: String,
     pub(crate) client_secret: String,
     pub(crate) timeout: Duration,
@@ -181,6 +182,8 @@ fn platform_config(
 ) -> Result<Option<PlatformConfig>, ConfigError> {
     let names = [
         "PLATFORM_API_ORIGIN",
+        "PLATFORM_IDENTITY_ISSUER",
+        "PLATFORM_RESOURCE_SCOPE_BINDINGS",
         "PLATFORM_CLIENT_ID",
         "PLATFORM_CLIENT_SECRET",
         "PLATFORM_AUTH_TIMEOUT_MS",
@@ -214,17 +217,23 @@ fn platform_config(
     {
         return Err(ConfigError::PlatformClientSecret);
     }
-    let legacy_authorization = match get("PLATFORM_AUTHORIZATION_MODE")
+    match get("PLATFORM_AUTHORIZATION_MODE")
         .as_deref()
-        .unwrap_or("legacy")
+        .unwrap_or("combined")
     {
-        "combined" => false,
-        "legacy" => true,
+        "combined" => {}
         _ => return Err(ConfigError::AuthorizationMode),
-    };
+    }
+    let identity_issuer = get("PLATFORM_IDENTITY_ISSUER")
+        .map(|raw| {
+            exact_origin(&raw, production).map_err(|_| ConfigError::IdentityIssuer)?;
+            Ok::<_, ConfigError>(raw)
+        })
+        .transpose()?;
     Ok(Some(PlatformConfig {
-        legacy_authorization,
         origin,
+        identity_issuer,
+        resource_scope_bindings: resource_scope_bindings(get("PLATFORM_RESOURCE_SCOPE_BINDINGS"))?,
         client_id,
         client_secret,
         timeout: Duration::from_millis(number(get, "PLATFORM_AUTH_TIMEOUT_MS", 3000, 100, 10000)?),
@@ -239,6 +248,65 @@ fn platform_config(
             })
             .transpose()?,
     }))
+}
+
+struct ResourceScopeBindings(BTreeMap<String, String>);
+
+impl<'de> serde::Deserialize<'de> for ResourceScopeBindings {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct BindingsVisitor;
+        impl<'de> serde::de::Visitor<'de> for BindingsVisitor {
+            type Value = ResourceScopeBindings;
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("an object of reviewed store operation scope bindings")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut bindings = BTreeMap::new();
+                while let Some((operation, scope)) = map.next_entry::<String, String>()? {
+                    if !matches!(
+                        operation.as_str(),
+                        "store:read"
+                            | "store:create"
+                            | "store:update"
+                            | "store-staff:read"
+                            | "store-daily-report:read"
+                            | "store-daily-report:create"
+                            | "store-daily-report:update"
+                    ) || scope.is_empty()
+                        || scope.len() > 128
+                        || !scope.as_bytes()[0].is_ascii_lowercase()
+                        || !scope.bytes().all(|byte| {
+                            byte.is_ascii_lowercase()
+                                || byte.is_ascii_digit()
+                                || b"._:-".contains(&byte)
+                        })
+                        || bindings.insert(operation, scope).is_some()
+                    {
+                        return Err(serde::de::Error::custom(
+                            "invalid or duplicate resource scope binding",
+                        ));
+                    }
+                }
+                Ok(ResourceScopeBindings(bindings))
+            }
+        }
+        deserializer.deserialize_map(BindingsVisitor)
+    }
+}
+
+fn resource_scope_bindings(raw: Option<String>) -> Result<BTreeMap<String, String>, ConfigError> {
+    let Some(raw) = raw else {
+        return Ok(BTreeMap::new());
+    };
+    if raw.len() > 32 * 1024 {
+        return Err(ConfigError::ResourceScopeBindings);
+    }
+    serde_json::from_str::<ResourceScopeBindings>(&raw)
+        .map(|bindings| bindings.0)
+        .map_err(|_| ConfigError::ResourceScopeBindings)
 }
 
 impl fmt::Debug for Config {
@@ -623,6 +691,8 @@ mod tests {
         assert!(config(&[]).unwrap().platform.is_none());
         for name in [
             "PLATFORM_API_ORIGIN",
+            "PLATFORM_IDENTITY_ISSUER",
+            "PLATFORM_RESOURCE_SCOPE_BINDINGS",
             "PLATFORM_CLIENT_ID",
             "PLATFORM_CLIENT_SECRET",
             "PLATFORM_AUTH_TIMEOUT_MS",
@@ -641,24 +711,17 @@ mod tests {
         let settings = cfg.platform.as_ref().unwrap();
         assert_eq!(settings.timeout, Duration::from_millis(3000));
         assert_eq!(settings.max_concurrent, 32);
-        assert!(settings.legacy_authorization);
-        for (mode, legacy) in [("combined", false), ("legacy", true)] {
-            let mut values = complete.to_vec();
-            values.push(("PLATFORM_AUTHORIZATION_MODE", mode));
-            assert_eq!(
-                config(&values)
-                    .unwrap()
-                    .platform
-                    .unwrap()
-                    .legacy_authorization,
-                legacy
-            );
-        }
+        assert!(settings.identity_issuer.is_none());
+        assert!(settings.resource_scope_bindings.is_empty());
+        let mut combined = complete.to_vec();
+        combined.push(("PLATFORM_AUTHORIZATION_MODE", "combined"));
+        assert!(config(&combined).is_ok());
         for (name, value) in [
             ("PLATFORM_CLIENT_ID", ""),
             ("PLATFORM_CLIENT_ID", "bad:client"),
             ("PLATFORM_CLIENT_SECRET", ""),
             ("PLATFORM_AUTHORIZATION_MODE", "automatic"),
+            ("PLATFORM_AUTHORIZATION_MODE", "legacy"),
             ("PLATFORM_CLIENT_SECRET", "private\r\nvalue"),
             ("PLATFORM_AUTH_TIMEOUT_MS", "99"),
             ("PLATFORM_AUTH_TIMEOUT_MS", "10001"),
@@ -682,6 +745,106 @@ mod tests {
             values.push((name, value));
             assert!(config(&values).is_err());
         }
+    }
+
+    #[test]
+    fn external_identity_issuer_is_exact_and_independent_of_internal_authority() {
+        let required = [
+            ("PLATFORM_API_ORIGIN", "https://platform.test"),
+            ("PLATFORM_CLIENT_ID", "stores-resource"),
+            ("PLATFORM_CLIENT_SECRET", "private-resource-secret"),
+        ];
+        for issuer in ["https://identity.test", "http://127.0.0.1:4444"] {
+            let mut values = required.to_vec();
+            values.push(("PLATFORM_IDENTITY_ISSUER", issuer));
+            assert_eq!(
+                config(&values)
+                    .unwrap()
+                    .platform
+                    .unwrap()
+                    .identity_issuer
+                    .as_deref(),
+                Some(issuer)
+            );
+        }
+        for issuer in [
+            "",
+            " https://identity.test",
+            "https://identity.test/",
+            "https://identity.test/path",
+            "http://identity.test",
+            "https://identity.test?token=private",
+            "urn:saas:platform:internal-capabilities",
+        ] {
+            let mut values = required.to_vec();
+            values.push(("PLATFORM_IDENTITY_ISSUER", issuer));
+            assert_eq!(config(&values).unwrap_err(), ConfigError::IdentityIssuer);
+        }
+        let mut production = required.to_vec();
+        production.extend([
+            ("NODE_ENV", "production"),
+            ("PLATFORM_IDENTITY_ISSUER", "http://127.0.0.1:4444"),
+        ]);
+        assert_eq!(
+            config(&production).unwrap_err(),
+            ConfigError::IdentityIssuer
+        );
+    }
+
+    #[test]
+    fn external_operation_scopes_require_reviewed_exact_and_unambiguous_bindings() {
+        assert!(resource_scope_bindings(None).unwrap().is_empty());
+        assert!(resource_scope_bindings(Some("{}".into()))
+            .unwrap()
+            .is_empty());
+        let all = r#"{"store:read":"stores:read","store:create":"stores:create","store:update":"stores:update","store-staff:read":"stores:staff:read","store-daily-report:read":"stores:reports:read","store-daily-report:create":"stores:reports:create","store-daily-report:update":"stores:reports:update"}"#;
+        let bindings = resource_scope_bindings(Some(all.into())).unwrap();
+        assert_eq!(bindings.len(), 7);
+        assert_eq!(bindings["store-staff:read"], "stores:staff:read");
+        for raw in [
+            "",
+            "[]",
+            "null",
+            "{",
+            r#"{"store:read":"stores:read","store:read":"stores:other"}"#,
+            r#"{"store:read":"stores:read","store:read":"stores:read"}"#,
+            r#"{"store:delete":"stores:read"}"#,
+            r#"{"work-order:read":"stores:read"}"#,
+            r#"{"store-staff:create":"stores:read"}"#,
+            r#"{"store:read":true}"#,
+            r#"{"store:read":{"scope":"stores:read"}}"#,
+            r#"{"store:read":""}"#,
+            r#"{"store:read":"Stores:read"}"#,
+            r#"{"store:read":" stores:read"}"#,
+            r#"{"store:read":"stores:read other"}"#,
+            r#"{"store:read":"stores/read"}"#,
+            r#"{"store:read":"stores\nread"}"#,
+        ] {
+            assert_eq!(
+                resource_scope_bindings(Some(raw.into())).unwrap_err(),
+                ConfigError::ResourceScopeBindings
+            );
+        }
+        let oversized = serde_json::json!({"store:read":"a".repeat(129)}).to_string();
+        assert_eq!(
+            resource_scope_bindings(Some(oversized)).unwrap_err(),
+            ConfigError::ResourceScopeBindings
+        );
+        let required = [
+            ("PLATFORM_API_ORIGIN", "https://platform.test"),
+            ("PLATFORM_CLIENT_ID", "stores-resource"),
+            ("PLATFORM_CLIENT_SECRET", "private-resource-secret"),
+            ("PLATFORM_RESOURCE_SCOPE_BINDINGS", all),
+        ];
+        assert_eq!(
+            config(&required)
+                .unwrap()
+                .platform
+                .unwrap()
+                .resource_scope_bindings
+                .len(),
+            7
+        );
     }
 
     #[test]
