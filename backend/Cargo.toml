@@ -25,4 +25,13 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 tower = { version = "0.5", features = ["util"] }
 
 [profile.dev]
+incremental = false
 debug = 1
+
+[profile.test]
+debug = 1
+incremental = false
+
+[profile.release]
+strip = "debuginfo"
+debug = 0
